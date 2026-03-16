@@ -27,6 +27,12 @@ interface ClarificationQuestion {
   blocking: boolean
 }
 
+interface ClarificationAnswer {
+  question_id: string
+  question: string
+  answer: string
+}
+
 interface TestPoint {
   id: string
   title: string
@@ -68,10 +74,24 @@ interface ValidationIssue {
   severity: 'high' | 'medium' | 'low'
 }
 
+interface ReviewNote {
+  note_type: string
+  message: string
+  severity: 'high' | 'medium' | 'low'
+  target_test_point_id: string
+}
+
 interface GenerateCasesResponse {
   platform: Platform
   cases: TestCase[]
   validation_issues: ValidationIssue[]
+  prompts: Record<string, string>
+}
+
+interface ReviewTestPointsResponse {
+  platform: Platform
+  reviewed_test_points: TestPoint[]
+  review_notes: ReviewNote[]
   prompts: Record<string, string>
 }
 
@@ -99,10 +119,8 @@ const fallbackMeta: MetaResponse = {
     '选择平台',
     '输入需求',
     'AI 解析需求',
-    '补充平台特性测试点',
     '确认歧义问题',
-    '生成测试点',
-    '确认测试点',
+    '审核测试点',
     '生成测试用例',
   ],
 }
@@ -110,6 +128,7 @@ const fallbackMeta: MetaResponse = {
 const meta = ref<MetaResponse>(fallbackMeta)
 const loadingMeta = ref(false)
 const analyzing = ref(false)
+const reviewing = ref(false)
 const generating = ref(false)
 const errorMessage = ref('')
 
@@ -122,18 +141,37 @@ const form = reactive({
 })
 
 const analysis = ref<AnalyzeResponse | null>(null)
+const reviewResult = ref<ReviewTestPointsResponse | null>(null)
 const generation = ref<GenerateCasesResponse | null>(null)
 const selectedTestPointIds = ref<string[]>([])
+const clarificationAnswers = reactive<Record<string, string>>({})
 
 const currentStep = computed(() => {
-  if (generation.value) return 4
-  if (analysis.value) return 3
+  if (generation.value) return 6
+  if (reviewResult.value) return 5
+  if (analysis.value) return 4
   return 2
 })
 
-const selectedTestPoints = computed(() => {
+const displayedTestPoints = computed(() => {
+  if (reviewResult.value) return reviewResult.value.reviewed_test_points
+  if (analysis.value) return analysis.value.test_points
+  return []
+})
+
+const selectedTestPoints = computed(() =>
+  displayedTestPoints.value.filter((item) => selectedTestPointIds.value.includes(item.id)),
+)
+
+const clarificationAnswerList = computed<ClarificationAnswer[]>(() => {
   if (!analysis.value) return []
-  return analysis.value.test_points.filter((item) => selectedTestPointIds.value.includes(item.id))
+  return analysis.value.clarification_questions
+    .map((item) => ({
+      question_id: item.id,
+      question: item.question,
+      answer: clarificationAnswers[item.id]?.trim() || '',
+    }))
+    .filter((item) => item.answer)
 })
 
 const selectedCount = computed(() => selectedTestPointIds.value.length)
@@ -159,6 +197,7 @@ const loadMeta = async () => {
 
 const analyzeRequirement = async () => {
   errorMessage.value = ''
+  reviewResult.value = null
   generation.value = null
   analyzing.value = true
   try {
@@ -171,9 +210,10 @@ const analyzeRequirement = async () => {
         actors: formatLines(form.actors),
         preconditions: formatLines(form.preconditions),
         business_rules: formatLines(form.businessRules),
+        clarification_answers: clarificationAnswerList.value,
       }),
     })
-    if (!response.ok) throw new Error('需求解析失败，请检查后端服务是否启动')
+    if (!response.ok) throw new Error(await extractErrorMessage(response, '需求解析失败，请检查后端服务是否启动'))
     const data = (await response.json()) as AnalyzeResponse
     analysis.value = data
     selectedTestPointIds.value = data.test_points.map((item) => item.id)
@@ -181,6 +221,33 @@ const analyzeRequirement = async () => {
     errorMessage.value = error instanceof Error ? error.message : '需求解析失败'
   } finally {
     analyzing.value = false
+  }
+}
+
+const reviewTestPoints = async () => {
+  if (!analysis.value) return
+  errorMessage.value = ''
+  generation.value = null
+  reviewing.value = true
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/workflow/review-test-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: form.platform,
+        summary: analysis.value.summary,
+        clarification_answers: clarificationAnswerList.value,
+        test_points: analysis.value.test_points,
+      }),
+    })
+    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试点审核失败'))
+    const data = (await response.json()) as ReviewTestPointsResponse
+    reviewResult.value = data
+    selectedTestPointIds.value = data.reviewed_test_points.map((item) => item.id)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '测试点审核失败'
+  } finally {
+    reviewing.value = false
   }
 }
 
@@ -198,12 +265,21 @@ const generateCases = async () => {
         selected_test_points: selectedTestPoints.value,
       }),
     })
-    if (!response.ok) throw new Error('测试用例生成失败，请检查后端服务是否启动')
+    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试用例生成失败，请检查后端服务是否启动'))
     generation.value = (await response.json()) as GenerateCasesResponse
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '测试用例生成失败'
   } finally {
     generating.value = false
+  }
+}
+
+const extractErrorMessage = async (response: Response, fallback: string) => {
+  try {
+    const payload = await response.json()
+    return payload.detail || fallback
+  } catch {
+    return fallback
   }
 }
 
@@ -216,8 +292,7 @@ const toggleTestPoint = (id: string) => {
 }
 
 const selectAllTestPoints = () => {
-  if (!analysis.value) return
-  selectedTestPointIds.value = analysis.value.test_points.map((item) => item.id)
+  selectedTestPointIds.value = displayedTestPoints.value.map((item) => item.id)
 }
 
 const clearSelection = () => {
@@ -252,7 +327,7 @@ onMounted(loadMeta)
 
     <section class="step-strip">
       <div
-        v-for="(step, index) in meta.workflow_steps.slice(0, 4)"
+        v-for="(step, index) in meta.workflow_steps"
         :key="step"
         class="step-item"
         :class="{ active: currentStep >= index + 1 }"
@@ -384,7 +459,7 @@ onMounted(loadMeta)
           <div class="panel-header">
             <div>
               <p class="panel-title">待确认问题</p>
-              <p class="panel-subtitle">这些问题建议在正式落地前由测试或产品确认。</p>
+              <p class="panel-subtitle">先补充这些答案，再进入测试点审核阶段。</p>
             </div>
           </div>
           <div v-if="analysis.clarification_questions.length" class="question-list">
@@ -395,23 +470,50 @@ onMounted(loadMeta)
             >
               <strong>{{ question.question }}</strong>
               <p>{{ question.reason }}</p>
+              <textarea
+                v-model="clarificationAnswers[question.id]"
+                class="inline-textarea"
+                rows="3"
+                placeholder="请输入该问题的补充答案，补充后可重新解析需求"
+              />
             </article>
           </div>
           <p v-else class="empty-state">当前需求信息较完整，没有识别到阻塞性问题。</p>
+          <div class="action-row top-gap" v-if="analysis.clarification_questions.length">
+            <button class="ghost-button" :disabled="analyzing" @click="analyzeRequirement">
+              {{ analyzing ? '正在重新解析...' : '带着澄清答案重新解析' }}
+            </button>
+          </div>
         </div>
 
         <div class="panel">
           <div class="panel-header">
             <div>
-              <p class="panel-title">测试点清单</p>
-              <p class="panel-subtitle">已选 {{ selectedCount }} 个测试点，可继续调整。</p>
+              <p class="panel-title">{{ reviewResult ? '审核后测试点' : '原始测试点清单' }}</p>
+              <p class="panel-subtitle">
+                已选 {{ selectedCount }} 个测试点，{{ reviewResult ? '可直接进入用例生成' : '建议先审核后再生成用例' }}。
+              </p>
             </div>
             <span class="status-badge">{{ analysis.coverage_dimensions.length }} 个覆盖维度</span>
           </div>
 
+          <div v-if="reviewResult?.review_notes.length" class="review-note-box">
+            <p class="list-title">审核说明</p>
+            <div class="question-list compact-list">
+              <article
+                v-for="note in reviewResult.review_notes"
+                :key="`${note.note_type}-${note.message}`"
+                class="question-item compact-item"
+              >
+                <strong>{{ note.note_type }}</strong>
+                <p>{{ note.message }}</p>
+              </article>
+            </div>
+          </div>
+
           <div class="test-point-list">
             <label
-              v-for="testPoint in analysis.test_points"
+              v-for="testPoint in displayedTestPoints"
               :key="testPoint.id"
               class="test-point-item"
               :class="{ checked: selectedTestPointIds.includes(testPoint.id) }"
@@ -437,12 +539,15 @@ onMounted(loadMeta)
           </div>
 
           <div class="action-row">
+            <button class="ghost-button" :disabled="reviewing" @click="reviewTestPoints">
+              {{ reviewing ? '正在审核测试点...' : reviewResult ? '重新审核测试点' : '审核测试点' }}
+            </button>
             <button
               class="primary-button"
-              :disabled="generating || selectedCount === 0"
+              :disabled="generating || selectedCount === 0 || !reviewResult"
               @click="generateCases"
             >
-              {{ generating ? '正在生成测试用例...' : '生成测试用例' }}
+              {{ generating ? '正在生成测试用例...' : '基于审核后测试点生成用例' }}
             </button>
           </div>
         </div>

@@ -2,7 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .models import AnalyzeRequest, AnalyzeResponse, GenerateCasesRequest, GenerateCasesResponse, MetaResponse
+from .models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    GenerateCasesRequest,
+    GenerateCasesResponse,
+    MetaResponse,
+    ReviewTestPointsRequest,
+    ReviewTestPointsResponse,
+)
 from .services.workflow_service import WorkflowService
 
 settings = get_settings()
@@ -42,3 +50,11 @@ async def generate_cases(payload: GenerateCasesRequest) -> GenerateCasesResponse
         return await workflow_service.generate_cases(payload)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"测试用例生成失败：{exc}") from exc
+
+
+@app.post("/api/workflow/review-test-points", response_model=ReviewTestPointsResponse)
+async def review_test_points(payload: ReviewTestPointsRequest) -> ReviewTestPointsResponse:
+    try:
+        return await workflow_service.review_test_points(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"测试点审核失败：{exc}") from exc

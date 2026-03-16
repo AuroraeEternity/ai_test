@@ -13,7 +13,12 @@ from ..models import (
     MetaResponse,
     PlatformOption,
     PlatformType,
+    ReviewTestPointsLLMOutput,
+    ReviewTestPointsRequest,
+    ReviewTestPointsResponse,
+    ReviewNote,
     RiskLevel,
+    TestPoint,
     TestCase,
     ValidationIssue,
 )
@@ -22,6 +27,8 @@ from ..prompts import (
     build_analysis_user_prompt,
     build_case_system_prompt,
     build_case_user_prompt,
+    build_review_system_prompt,
+    build_review_user_prompt,
 )
 from .llm import LLMService
 
@@ -61,7 +68,7 @@ class WorkflowService:
         llm_output = await self._generate_cases_with_llm(system_prompt, user_prompt)
         cases = self._normalize_cases(payload, llm_output.cases)
         validation_issues = llm_output.validation_issues
-        validation_issues = validation_issues + self._validate_cases(cases)
+        validation_issues = validation_issues + self._validate_cases(cases, payload.selected_test_points, payload.platform)
 
         return GenerateCasesResponse(
             platform=payload.platform,
@@ -70,6 +77,24 @@ class WorkflowService:
             prompts={
                 "case_system_prompt": system_prompt,
                 "case_user_prompt": user_prompt,
+                "execution_mode": "llm",
+            },
+        )
+
+    async def review_test_points(self, payload: ReviewTestPointsRequest) -> ReviewTestPointsResponse:
+        # review_test_points 阶段专门用于“收敛”测试点质量，
+        # 让最终进入用例生成阶段的输入更稳定、更完整。
+        system_prompt = build_review_system_prompt()
+        user_prompt = build_review_user_prompt(payload)
+        llm_output = await self._review_test_points_with_llm(system_prompt, user_prompt)
+
+        return ReviewTestPointsResponse(
+            platform=payload.platform,
+            reviewed_test_points=self._normalize_reviewed_test_points(llm_output.reviewed_test_points),
+            review_notes=llm_output.review_notes,
+            prompts={
+                "review_system_prompt": system_prompt,
+                "review_user_prompt": user_prompt,
                 "execution_mode": "llm",
             },
         )
@@ -93,10 +118,8 @@ class WorkflowService:
                 "选择平台",
                 "输入需求",
                 "AI 解析需求",
-                "补充平台特性测试点",
                 "确认歧义问题",
-                "生成测试点",
-                "确认测试点",
+                "审核测试点",
                 "生成测试用例",
             ],
         )
@@ -114,6 +137,21 @@ class WorkflowService:
             raise ValueError("LLM 未返回 coverage_dimensions。")
         if not result.test_points:
             raise ValueError("LLM 未返回 test_points。")
+        return result
+
+    async def _review_test_points_with_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> ReviewTestPointsLLMOutput:
+        raw_result = await self.llm_service.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=ReviewTestPointsLLMOutput.model_json_schema(),
+        )
+        result = ReviewTestPointsLLMOutput.model_validate(raw_result)
+        if not result.reviewed_test_points:
+            raise ValueError("LLM 未返回 reviewed_test_points。")
         return result
 
     async def _generate_cases_with_llm(
@@ -155,7 +193,22 @@ class WorkflowService:
 
         return normalized_cases
 
-    def _validate_cases(self, cases: list[TestCase]) -> list[ValidationIssue]:
+    def _normalize_reviewed_test_points(self, test_points: list[TestPoint]) -> list[TestPoint]:
+        normalized_test_points: list[TestPoint] = []
+
+        for index, test_point in enumerate(test_points, start=1):
+            if not test_point.id:
+                test_point.id = f"tp-{index}"
+            normalized_test_points.append(test_point)
+
+        return normalized_test_points
+
+    def _validate_cases(
+        self,
+        cases: list[TestCase],
+        selected_test_points: list[TestPoint],
+        platform: PlatformType,
+    ) -> list[ValidationIssue]:
         # 这里先做轻量级规则校验，主要拦截明显重复和不可执行结果。
         # 后续如果要增强质量，可以继续拆成重复检查器、完整性检查器等独立模块。
         issues: list[ValidationIssue] = []
@@ -171,6 +224,22 @@ class WorkflowService:
             )
 
         for case in cases:
+            if not case.preconditions:
+                issues.append(
+                    ValidationIssue(
+                        issue_type="completeness",
+                        message=f"{case.id} 缺少前置条件。",
+                        severity=RiskLevel.MEDIUM,
+                    )
+                )
+            if len(case.steps) < 2:
+                issues.append(
+                    ValidationIssue(
+                        issue_type="executability",
+                        message=f"{case.id} 的测试步骤过少，建议补充可执行操作。",
+                        severity=RiskLevel.HIGH,
+                    )
+                )
             if len(case.expected_results) < 2:
                 issues.append(
                     ValidationIssue(
@@ -179,5 +248,33 @@ class WorkflowService:
                         severity=RiskLevel.HIGH,
                     )
                 )
+            if not case.requirement_refs:
+                issues.append(
+                    ValidationIssue(
+                        issue_type="traceability",
+                        message=f"{case.id} 缺少 requirement_refs，无法回溯到需求或测试点。",
+                        severity=RiskLevel.MEDIUM,
+                    )
+                )
+            if platform.value not in case.coverage_tags:
+                issues.append(
+                    ValidationIssue(
+                        issue_type="platform",
+                        message=f"{case.id} 缺少平台标签 {platform.value}。",
+                        severity=RiskLevel.MEDIUM,
+                    )
+                )
+
+        selected_ids = {item.id for item in selected_test_points}
+        generated_ids = {case.source_test_point_id for case in cases}
+        missing_ids = selected_ids - generated_ids
+        for missing_id in missing_ids:
+            issues.append(
+                ValidationIssue(
+                    issue_type="coverage",
+                    message=f"测试点 {missing_id} 未生成对应测试用例。",
+                    severity=RiskLevel.HIGH,
+                )
+            )
         return issues
 

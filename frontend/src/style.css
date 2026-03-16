@@ -132,7 +132,7 @@ h3 {
 
 .step-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin: 24px 0;
 }
@@ -287,6 +287,23 @@ h3 {
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
 }
 
+.inline-textarea {
+  width: 100%;
+  margin-top: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(248, 250, 252, 0.9);
+  padding: 12px 14px;
+  color: #111827;
+  resize: vertical;
+}
+
+.inline-textarea:focus {
+  outline: none;
+  border-color: rgba(99, 102, 241, 0.55);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
+}
+
 .field-row {
   margin: 16px 0;
 }
@@ -370,6 +387,10 @@ h3 {
   border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
+.top-gap {
+  margin-top: 16px;
+}
+
 .result-section {
   margin-top: 28px;
 }
@@ -400,6 +421,18 @@ h3 {
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: #fff;
   padding: 16px;
+}
+
+.compact-list {
+  margin-top: 12px;
+}
+
+.compact-item {
+  padding: 14px 16px;
+}
+
+.review-note-box {
+  margin-bottom: 18px;
 }
 
 .test-point-item {

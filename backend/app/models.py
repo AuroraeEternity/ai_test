@@ -27,6 +27,12 @@ class ClarificationQuestion(BaseModel):
     blocking: bool = True
 
 
+class ClarificationAnswer(BaseModel):
+    question_id: str
+    question: str
+    answer: str
+
+
 class StructuredSummary(BaseModel):
     title: str
     business_goal: str
@@ -54,6 +60,13 @@ class ValidationIssue(BaseModel):
     severity: RiskLevel = RiskLevel.MEDIUM
 
 
+class ReviewNote(BaseModel):
+    note_type: str
+    message: str
+    severity: RiskLevel = RiskLevel.MEDIUM
+    target_test_point_id: str = ""
+
+
 class TestCase(BaseModel):
     id: str
     title: str
@@ -76,6 +89,7 @@ class AnalyzeRequest(BaseModel):
     business_rules: list[str] = Field(default_factory=list)
     actors: list[str] = Field(default_factory=list)
     preconditions: list[str] = Field(default_factory=list)
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):
@@ -92,6 +106,25 @@ class AnalyzeLLMOutput(BaseModel):
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
     coverage_dimensions: list[str] = Field(default_factory=list)
     test_points: list[TestPoint] = Field(default_factory=list)
+
+
+class ReviewTestPointsRequest(BaseModel):
+    platform: PlatformType
+    summary: StructuredSummary
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+    test_points: list[TestPoint] = Field(default_factory=list)
+
+
+class ReviewTestPointsResponse(BaseModel):
+    platform: PlatformType
+    reviewed_test_points: list[TestPoint] = Field(default_factory=list)
+    review_notes: list[ReviewNote] = Field(default_factory=list)
+    prompts: dict[str, str] = Field(default_factory=dict)
+
+
+class ReviewTestPointsLLMOutput(BaseModel):
+    reviewed_test_points: list[TestPoint] = Field(default_factory=list)
+    review_notes: list[ReviewNote] = Field(default_factory=list)
 
 
 class GenerateCasesRequest(BaseModel):

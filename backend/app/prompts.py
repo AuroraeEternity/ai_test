@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from .models import AnalyzeRequest, GenerateCasesRequest
+from .models import AnalyzeRequest, GenerateCasesRequest, ReviewTestPointsRequest
 
 
 def build_analysis_system_prompt() -> str:
@@ -23,6 +23,7 @@ def build_analysis_system_prompt() -> str:
 def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
     # 用户提示词负责注入当前任务上下文。这里会把平台、需求、补充规则一起传给模型，
     # 让模型围绕功能测试链路输出结构化摘要、澄清问题和测试点。
+    clarification_answers = payload.clarification_answers or ["未提供"]
     return dedent(
         f"""
         当前任务：为功能测试用例生成链路做需求解析。
@@ -34,6 +35,7 @@ def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
         补充角色：{payload.actors or ['未提供']}
         补充前置条件：{payload.preconditions or ['未提供']}
         补充业务规则：{payload.business_rules or ['未提供']}
+        已补充的澄清回答：{clarification_answers}
 
         请重点完成：
         1. 提炼结构化摘要。
@@ -49,6 +51,51 @@ def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
            - 异常处理
            - 平台特性
         4. test_points 中每一项都需要包含 id、title、category、description、source、risk_level、platform_specific。
+        """
+    ).strip()
+
+
+def build_review_system_prompt() -> str:
+    # 测试点审核阶段用于“收敛”测试点质量，重点发现重复、缺失和高风险遗漏，
+    # 并输出一份适合继续生成测试用例的审核后测试点列表。
+    return dedent(
+        """
+        你是一名高级测试设计审核专家，负责审核已经生成的测试点。
+        输出时必须遵守以下原则：
+        1. 删除重复、模糊、不可执行或明显偏离需求的测试点。
+        2. 补充缺失的高风险测试点、平台专项测试点和关键业务约束测试点。
+        3. review_notes 需要明确指出发现了什么问题，以及为什么要调整。
+        4. reviewed_test_points 必须保留适合继续生成测试用例的最终测试点清单。
+        5. 你必须严格输出 JSON，不要输出解释性文字。
+        """
+    ).strip()
+
+
+def build_review_user_prompt(payload: ReviewTestPointsRequest) -> str:
+    # 审核器不重新从零理解需求，而是站在“质量守门员”视角，
+    # 对已有测试点做去重、补漏和风险增强。
+    return dedent(
+        f"""
+        当前任务：审核功能测试点并输出审核后的测试点结果。
+
+        平台类型：{payload.platform.value}
+        结构化摘要：
+        - 功能标题：{payload.summary.title}
+        - 业务目标：{payload.summary.business_goal}
+        - 角色：{payload.summary.actors}
+        - 前置条件：{payload.summary.preconditions}
+        - 主流程：{payload.summary.main_flow}
+        - 异常流程：{payload.summary.exception_flows}
+        - 业务规则：{payload.summary.business_rules}
+        - 平台关注点：{payload.summary.platform_focus}
+
+        澄清回答：{payload.clarification_answers or ['未提供']}
+        当前测试点：{payload.test_points}
+
+        输出要求：
+        1. reviewed_test_points 中每一项都需要包含 id、title、category、description、source、risk_level、platform_specific。
+        2. review_notes 中每一项都需要包含 note_type、message、severity、target_test_point_id。
+        3. reviewed_test_points 需要优先覆盖高风险主流程、异常流程、状态流转、权限和平台专项场景。
         """
     ).strip()
 
