@@ -4,6 +4,8 @@ from .models import AnalyzeRequest, GenerateCasesRequest
 
 
 def build_analysis_system_prompt() -> str:
+    # 系统提示词约束模型的角色和输出原则，确保需求解析阶段先做结构化理解，
+    # 再产出待确认问题和测试点，而不是直接生成松散文本。
     return dedent(
         """
         你是一名高级测试分析专家，负责将原始需求整理成结构化测试输入。
@@ -19,6 +21,8 @@ def build_analysis_system_prompt() -> str:
 
 
 def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
+    # 用户提示词负责注入当前任务上下文。这里会把平台、需求、补充规则一起传给模型，
+    # 让模型围绕功能测试链路输出结构化摘要、澄清问题和测试点。
     return dedent(
         f"""
         当前任务：为功能测试用例生成链路做需求解析。
@@ -50,6 +54,8 @@ def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
 
 
 def build_case_system_prompt() -> str:
+    # 用例生成阶段的系统提示词更强调“严格模板化输出”，
+    # 避免模型返回解释性内容或偏离已确认的测试点。
     return dedent(
         """
         你是一名高级测试设计专家，负责根据已确认的测试点生成结构化功能测试用例。
@@ -64,6 +70,8 @@ def build_case_system_prompt() -> str:
 
 
 def build_case_user_prompt(payload: GenerateCasesRequest) -> str:
+    # 这里把上一步确认过的结构化摘要和测试点再次明确传给模型，
+    # 让最终生成结果尽量可追溯、可校验、可直接渲染到前端。
     selected_titles = [item.title for item in payload.selected_test_points]
     return dedent(
         f"""

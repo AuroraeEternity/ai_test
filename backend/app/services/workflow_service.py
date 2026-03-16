@@ -28,10 +28,14 @@ from .llm import LLMService
 
 class WorkflowService:
     def __init__(self) -> None:
+        # 这里统一持有配置和 LLM 客户端，方便后续继续扩展知识库检索、
+        # 审核器、导出器等流程组件，而不需要把初始化逻辑散落到接口层。
         self.settings = get_settings()
         self.llm_service = LLMService(self.settings)
 
     async def analyze(self, payload: AnalyzeRequest) -> AnalyzeResponse:
+        # analyze 阶段负责把原始需求转成结构化摘要、待确认问题和测试点。
+        # 这一步是整个工作流的入口，后续前端展示和用例生成都依赖这里的输出。
         system_prompt = build_analysis_system_prompt()
         user_prompt = build_analysis_user_prompt(payload)
         llm_output = await self._analyze_with_llm(system_prompt, user_prompt)
@@ -50,6 +54,8 @@ class WorkflowService:
         )
 
     async def generate_cases(self, payload: GenerateCasesRequest) -> GenerateCasesResponse:
+        # generate_cases 阶段只消费已经确认过的测试点，
+        # 不再重新理解需求，避免生成结果偏离用户已确认的范围。
         system_prompt = build_case_system_prompt()
         user_prompt = build_case_user_prompt(payload)
         llm_output = await self._generate_cases_with_llm(system_prompt, user_prompt)
@@ -69,6 +75,7 @@ class WorkflowService:
         )
 
     def get_meta(self) -> MetaResponse:
+        # 这部分返回给前端固定元数据，用于渲染平台卡片和流程步骤条。
         return MetaResponse(
             platforms=[
                 PlatformOption(
@@ -95,6 +102,8 @@ class WorkflowService:
         )
 
     async def _analyze_with_llm(self, system_prompt: str, user_prompt: str) -> AnalyzeLLMOutput:
+        # 先按 AnalyzeLLMOutput 的 schema 调用模型，再用 Pydantic 二次校验，
+        # 防止模型返回结构看似正确但字段缺失、类型错误。
         raw_result = await self.llm_service.generate_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -112,6 +121,8 @@ class WorkflowService:
         system_prompt: str,
         user_prompt: str,
     ) -> GenerateCasesLLMOutput:
+        # 用例生成和需求解析共用同一个 LLM 客户端，但使用不同 schema。
+        # 这里要求模型必须返回 cases，否则直接视为失败，避免前端拿到空结果误判成功。
         raw_result = await self.llm_service.generate_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -127,6 +138,8 @@ class WorkflowService:
         payload: GenerateCasesRequest,
         cases: list[TestCase],
     ) -> list[TestCase]:
+        # 模型输出的结构不一定完全可靠，这里做一次最小归一化：
+        # 补默认 case_id、强制对齐平台字段，并尽量把用例重新挂回已选测试点。
         normalized_cases: list[TestCase] = []
         fallback_map = {item.id: item for item in payload.selected_test_points}
 
@@ -143,6 +156,8 @@ class WorkflowService:
         return normalized_cases
 
     def _validate_cases(self, cases: list[TestCase]) -> list[ValidationIssue]:
+        # 这里先做轻量级规则校验，主要拦截明显重复和不可执行结果。
+        # 后续如果要增强质量，可以继续拆成重复检查器、完整性检查器等独立模块。
         issues: list[ValidationIssue] = []
 
         duplicated_titles = [title for title, count in Counter(case.title for case in cases).items() if count > 1]
