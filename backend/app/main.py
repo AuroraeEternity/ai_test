@@ -7,6 +7,8 @@ from .models import (
     AnalyzeResponse,
     GenerateCasesRequest,
     GenerateCasesResponse,
+    IntegrationTestsRequest,
+    IntegrationTestsResponse,
     MetaResponse,
     ReviewTestPointsRequest,
     ReviewTestPointsResponse,
@@ -58,3 +60,11 @@ async def review_test_points(payload: ReviewTestPointsRequest) -> ReviewTestPoin
         return await workflow_service.review_test_points(payload)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"测试点审核失败：{exc}") from exc
+
+
+@app.post("/api/workflow/integration-tests", response_model=IntegrationTestsResponse)
+async def integration_tests(payload: IntegrationTestsRequest) -> IntegrationTestsResponse:
+    try:
+        return await workflow_service.generate_integration_tests(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"流程联动测试生成失败：{exc}") from exc
