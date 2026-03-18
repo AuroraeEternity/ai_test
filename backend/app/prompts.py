@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from .models import AnalyzeRequest, GenerateCasesRequest, IntegrationTestsRequest, ReviewTestPointsRequest
+from .models import AnalyzeRequest, GenerateCasesRequest, IntegrationTestsRequest, MindMapRequest, ReviewTestPointsRequest
 
 
 def build_analysis_system_prompt() -> str:
@@ -107,10 +107,11 @@ def build_case_system_prompt() -> str:
         你是一名高级测试设计专家，负责根据已确认的测试点生成结构化功能测试用例。
         输出时必须遵守以下原则：
         1. 每条用例必须对应一个已确认测试点。
-        2. 用例结构必须包含前置条件、测试数据、步骤和预期结果。
-        3. 用例需要体现平台特性，不生成与平台无关的场景。
-        4. 避免重复、避免需求中不存在的假设、避免不可执行的表述。
-        5. 你必须严格输出 JSON，不要输出解释性文字。
+        2. 每条用例必须标注 function_module，即该用例所属的功能模块名称（来自分析阶段提取的 functions 列表）。
+        3. 用例结构必须包含前置条件、测试数据、步骤和预期结果。
+        4. 用例需要体现平台特性，不生成与平台无关的场景。
+        5. 避免重复、避免需求中不存在的假设、避免不可执行的表述。
+        6. 你必须严格输出 JSON，不要输出解释性文字。
         """
     ).strip()
 
@@ -132,14 +133,18 @@ def build_case_user_prompt(payload: GenerateCasesRequest) -> str:
         - 业务规则：{payload.summary.business_rules}
         - 平台关注点：{payload.summary.platform_focus}
 
+        功能模块列表（functions）：
+        {payload.functions}
+
         已确认测试点：
         {selected_titles}
 
         输出要求：
         1. 使用标准化测试用例模板。
         2. 优先覆盖高风险测试点。
-        3. 每条测试用例要包含 coverage_tags，并体现平台特性。
-        4. 每条 cases 记录都需要包含 id、title、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
+        3. 每条测试用例必须标注 function_module，取值必须来自上方的功能模块列表。
+        4. 每条测试用例要包含 coverage_tags，并体现平台特性。
+        5. 每条 cases 记录都需要包含 id、title、function_module、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
         """
     ).strip()
 
@@ -187,5 +192,77 @@ def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
            - 中间环节异常后的恢复和回退
            - 跨模块状态传递和数据一致性
            - 未授权/未登录直接访问后续环节
+        """
+    ).strip()
+
+
+def build_mindmap_system_prompt() -> str:
+    return dedent(
+        """
+        你是一名高级测试设计专家，负责将测试用例和测试点转化为"测试设计思维导图"。
+        你必须严格遵守以下规则：
+
+        【层级结构规则 — 严格 5 层】
+        - 第1层（root 的直接 children）：功能模块
+        - 第2层：业务维度
+        - 第3层：功能点
+        - 第4层：测试分类（正常 / 边界 / 异常）
+        - 第5层：具体测试点
+
+        【业务维度规则】
+        1. 第2层必须使用"业务维度"，禁止直接放"正常/异常/边界"。
+        2. 优先从以下推荐维度中选取适用项：
+           显示规则 / 数据规则 / 交互行为 / UI表现 / 状态流转 / 异常处理 / 环境与兼容性
+        3. 如果功能特征不适合上述维度，可自定义维度（如：权限控制、并发处理、性能边界）。
+        4. 禁止将不同维度的测试点混在同一个维度节点下。
+        5. 如果某个维度下没有实际测试点，则不输出该维度节点。
+
+        【节点规则】
+        1. 仅输出"测试点树"，禁止包含测试步骤、预期结果、TC编号。
+        2. 每个节点必须是"测试点"或"分类"，而不是执行过程。
+        3. 所有节点的 topic 必须 ≤ 10个字，使用名词或短语，禁止使用句子。
+        4. 去重：相同逻辑只保留一个，公共步骤不得重复出现。
+
+        【流程联动规则】
+        如果有流程联动测试，在第1层单独设一个"流程联动"模块，其下按"场景 → 关键检查点"展开（不套用业务维度）。
+
+        【输出格式】
+        严格输出 JSON，不要输出解释性文字。
+        """
+    ).strip()
+
+
+def build_mindmap_user_prompt(payload: MindMapRequest) -> str:
+    func_list = payload.functions or ["未提取"]
+    tp_titles = [f"[{tp.category}] {tp.title}" for tp in payload.test_points]
+    case_summaries = [
+        f"[{c.function_module or '未分类'}] {c.title} ({c.priority})"
+        for c in payload.cases
+    ]
+    integration_summaries = [
+        f"{it.title} — {it.flow}" for it in payload.integration_tests
+    ]
+
+    return dedent(
+        f"""
+        当前任务：生成测试设计思维导图的树结构（严格 5 层）。
+
+        功能标题：{payload.summary.title}
+        功能模块列表：{func_list}
+        测试点列表：{tp_titles}
+        功能用例摘要：{case_summaries}
+        流程联动测试摘要：{integration_summaries or ['无']}
+
+        请严格按以下层级输出 root 节点：
+        root.topic = 功能标题
+        root.children = 第1层功能模块
+
+        每个功能模块（第1层）下：
+          → 第2层：业务维度（从推荐列表选取或自定义，跳过无测试点的维度）
+            → 第3层：功能点
+              → 第4层：测试分类（正常/边界/异常，至少有测试点的分类才输出）
+                → 第5层：具体测试点（≤10字短语）
+
+        如果有流程联动测试，在第1层单独建"流程联动"模块，下挂"场景 → 关键检查点"。
         """
     ).strip()

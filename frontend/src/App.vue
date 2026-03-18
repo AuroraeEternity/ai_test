@@ -1,7 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import MindMapView from './components/MindMapView.vue'
 
 type Platform = 'web' | 'app' | 'plugin'
+
+interface HistoryRecord {
+  id: string
+  title: string
+  platform: Platform
+  project: string
+  cases_count: number
+  integration_count: number
+  timestamp: string
+  data: {
+    analysis?: AnalyzeResponse
+    reviewResult?: ReviewTestPointsResponse
+    generation?: GenerateCasesResponse
+    integrationResult?: IntegrationTestsResponse
+  }
+}
 
 interface PlatformOption {
   label: string
@@ -58,6 +75,7 @@ interface AnalyzeResponse {
 interface TestCase {
   id: string
   title: string
+  function_module: string
   case_type: string
   priority: 'P0' | 'P1' | 'P2'
   requirement_refs: string[]
@@ -138,12 +156,9 @@ const fallbackMeta: MetaResponse = {
   ],
   workflow_steps: [
     '输入需求',
-    'AI 结构分析',
-    '缺失检查与澄清',
-    '审核测试点',
-    '生成功能用例',
-    '流程联动测试',
-    '结果校验',
+    'AI 澄清问题',
+    '测试点审核',
+    '用例生成',
   ],
 }
 
@@ -175,16 +190,21 @@ const clarificationAnswers = reactive<Record<string, string>>({})
 
 const viewStep = ref(1)
 const summaryFilter = ref<'all' | 'functional' | 'integration'>('all')
+const summaryViewMode = ref<'list' | 'mindmap'>('list')
+
+const historyExpanded = ref(false)
+const historyRecords = ref<HistoryRecord[]>([])
+const activeHistoryId = ref<string | null>(null)
+const taskActive = ref(false)
 
 const maxReachedStep = computed(() => {
-  if (integrationResult.value) return 6
   if (generation.value) return 4
   if (reviewResult.value || (analysis.value && analysis.value.clarification_questions.length === 0)) return 3
   if (analysis.value && analysis.value.clarification_questions.length > 0) return 2
   return 1
 })
 
-const stepLabels = ['需求输入', 'AI 澄清问题', '测试点审核', '功能用例', '流程联动测试', '用例汇总']
+const stepLabels = ['需求输入', 'AI 澄清问题', '测试点审核', '用例生成']
 
 const goToStep = (step: number) => {
   if (step >= 1 && step <= maxReachedStep.value) {
@@ -318,10 +338,13 @@ const reviewTestPoints = async () => {
   }
 }
 
-const generateCases = async () => {
+const generateAllCases = async () => {
   if (!analysis.value || selectedTestPoints.value.length === 0) return
   errorMessage.value = ''
   generating.value = true
+  integrationResult.value = null
+  generation.value = null
+
   try {
     const response = await fetch(`${apiBaseUrl}/api/workflow/generate-cases`, {
       method: 'POST',
@@ -329,6 +352,7 @@ const generateCases = async () => {
       body: JSON.stringify({
         platform: form.platform,
         summary: analysis.value.summary,
+        functions: analysis.value.functions,
         selected_test_points: selectedTestPoints.value,
       }),
     })
@@ -337,15 +361,17 @@ const generateCases = async () => {
     viewStep.value = 4
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '测试用例生成失败'
-  } finally {
     generating.value = false
+    return
   }
-}
+  generating.value = false
 
-const generateIntegrationTests = async () => {
-  if (!analysis.value) return
   const points = reviewResult.value?.reviewed_test_points || analysis.value.test_points
-  errorMessage.value = ''
+  if (analysis.value.flows.length === 0) {
+    await saveCurrentToHistory()
+    return
+  }
+
   generatingIntegration.value = true
   try {
     const response = await fetch(`${apiBaseUrl}/api/workflow/integration-tests`, {
@@ -360,11 +386,11 @@ const generateIntegrationTests = async () => {
     })
     if (!response.ok) throw new Error(await extractErrorMessage(response, '流程联动测试生成失败'))
     integrationResult.value = (await response.json()) as IntegrationTestsResponse
-    viewStep.value = 5
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '流程联动测试生成失败'
   } finally {
     generatingIntegration.value = false
+    await saveCurrentToHistory()
   }
 }
 
@@ -393,7 +419,81 @@ const clearSelection = () => {
   selectedTestPointIds.value = []
 }
 
-onMounted(loadMeta)
+const loadHistory = async () => {
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/history`)
+    if (res.ok) historyRecords.value = await res.json()
+  } catch { /* ignore */ }
+}
+
+const saveCurrentToHistory = async () => {
+  if (!analysis.value || !generation.value) return
+  const id = `hist_${Date.now()}`
+  const record: HistoryRecord = {
+    id,
+    title: analysis.value.summary.title,
+    platform: form.platform,
+    project: form.project,
+    cases_count: generation.value.cases.length,
+    integration_count: integrationResult.value?.integration_tests.length || 0,
+    timestamp: new Date().toISOString(),
+    data: {
+      analysis: analysis.value,
+      reviewResult: reviewResult.value || undefined,
+      generation: generation.value,
+      integrationResult: integrationResult.value || undefined,
+    },
+  }
+  try {
+    const res = await fetch(`${apiBaseUrl}/api/history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record),
+    })
+    if (res.ok) {
+      activeHistoryId.value = id
+      await loadHistory()
+    }
+  } catch { /* ignore */ }
+}
+
+const loadHistoryRecord = (record: HistoryRecord) => {
+  taskActive.value = true
+  activeHistoryId.value = record.id
+  form.platform = record.platform
+  form.project = record.project
+  analysis.value = record.data.analysis || null
+  reviewResult.value = record.data.reviewResult || null
+  generation.value = record.data.generation || null
+  integrationResult.value = record.data.integrationResult || null
+  if (record.data.analysis) {
+    selectedTestPointIds.value = (
+      record.data.reviewResult?.reviewed_test_points ||
+      record.data.analysis.test_points
+    ).map((t) => t.id)
+  }
+  if (generation.value) viewStep.value = 4
+  else viewStep.value = 1
+}
+
+const deleteHistoryRecord = async (id: string) => {
+  try {
+    await fetch(`${apiBaseUrl}/api/history/${id}`, { method: 'DELETE' })
+    if (activeHistoryId.value === id) {
+      activeHistoryId.value = null
+      taskActive.value = false
+    }
+    await loadHistory()
+  } catch { /* ignore */ }
+}
+
+const formatHistoryTime = (iso: string) => {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+onMounted(() => { loadMeta(); loadHistory() })
 </script>
 
 <template>
@@ -410,16 +510,106 @@ onMounted(loadMeta)
         ></span>
       </div>
       <nav class="sidebar-nav">
-        <a href="#" class="nav-item active">
+        <button class="nav-item active" @click="historyExpanded = !historyExpanded">
           <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
           <span>生成测试用例</span>
-        </a>
+          <svg
+            class="nav-arrow"
+            :class="{ expanded: historyExpanded }"
+            width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          ><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </button>
+
+        <div class="nav-dropdown" v-if="historyExpanded">
+          <a href="#" class="dropdown-new" @click.prevent="taskActive = true; activeHistoryId = null; viewStep = 1; analysis = null; reviewResult = null; generation = null; integrationResult = null; form.requirementText = ''">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            新建任务
+          </a>
+
+          <div v-if="historyRecords.length" class="dropdown-divider"></div>
+          <div v-if="historyRecords.length" class="dropdown-label">历史记录</div>
+
+          <div v-if="historyRecords.length === 0" class="dropdown-empty">暂无记录</div>
+
+          <div
+            v-for="record in historyRecords"
+            :key="record.id"
+            class="dropdown-history-item"
+            :class="{ active: activeHistoryId === record.id }"
+            @click="loadHistoryRecord(record)"
+          >
+            <div class="dropdown-history-content">
+              <div class="dropdown-history-title">{{ record.title }}</div>
+              <div class="dropdown-history-meta">
+                <span>{{ record.platform.toUpperCase() }}</span>
+                <span>{{ record.cases_count }}条</span>
+                <span>{{ formatHistoryTime(record.timestamp) }}</span>
+              </div>
+            </div>
+            <button class="dropdown-history-delete" @click.stop="deleteHistoryRecord(record.id)" title="删除">&times;</button>
+          </div>
+        </div>
       </nav>
     </aside>
 
     <main class="app-main">
 
-      <div class="workbench-layout">
+      <!-- Welcome Page -->
+      <div v-if="!taskActive" class="welcome-page">
+        <div class="welcome-content">
+          <div class="welcome-icon">
+            <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+          </div>
+          <h1 class="welcome-title">AI 智能测试用例生成</h1>
+          <p class="welcome-desc">基于大语言模型，从需求文档自动生成结构化、高覆盖的功能测试用例与流程联动测试场景。</p>
+
+          <div class="welcome-features">
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              </div>
+              <div>
+                <div class="welcome-feature-title">需求智能解析</div>
+                <div class="welcome-feature-desc">自动提取功能模块、业务流程、前置条件</div>
+              </div>
+            </div>
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+              </div>
+              <div>
+                <div class="welcome-feature-title">测试点审核</div>
+                <div class="welcome-feature-desc">AI 生成测试点，人工审核确认后再生成用例</div>
+              </div>
+            </div>
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+              </div>
+              <div>
+                <div class="welcome-feature-title">流程联动测试</div>
+                <div class="welcome-feature-desc">自动识别端到端业务流，生成跨模块集成测试</div>
+              </div>
+            </div>
+            <div class="welcome-feature">
+              <div class="welcome-feature-icon">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+              </div>
+              <div>
+                <div class="welcome-feature-title">质量校验</div>
+                <div class="welcome-feature-desc">自动检测覆盖遗漏、重复用例、步骤完整性</div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary welcome-start" @click="taskActive = true; historyExpanded = true; viewStep = 1">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            新建测试任务
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="workbench-layout">
         <!-- Step Progress Bar -->
         <div class="step-progress">
           <div
@@ -641,146 +831,52 @@ onMounted(loadMeta)
                 <button
                   class="btn btn-primary"
                   :disabled="selectedCount === 0 || generating"
-                  @click="generateCases"
+                  @click="generateAllCases"
                 >
                   {{ generating ? '正在生成用例...' : '基于选中项生成用例' }}
                 </button>
               </div>
             </div>
 
-            <!-- Step 4: Generated Cases -->
+            <!-- Step 4: Results (functional + integration in one view) -->
             <div class="panel" v-if="viewStep === 4 && generation">
               <div class="panel-header">
-                <h2 class="panel-title">功能用例</h2>
-                <span class="badge badge-success">{{ generation.cases.length }} 条</span>
-              </div>
-
-              <div class="case-item" v-for="c in generation.cases" :key="c.id">
-                <div class="case-header">
-                  <div class="case-id-title">
-                    <span class="case-id">{{ c.id }}</span>
-                    <span class="case-title">{{ c.title }}</span>
-                  </div>
-                  <div>
-                    <span class="badge" :class="c.priority === 'P0' ? 'badge-danger' : 'badge-info'">{{ c.priority }}</span>
-                  </div>
-                </div>
-                <div class="case-body">
-                  <div>
-                    <div class="case-section-title">前置条件</div>
-                    <ul v-if="c.preconditions.length">
-                      <li v-for="pre in c.preconditions" :key="pre">{{ pre }}</li>
-                    </ul>
-                    <div v-else style="color: var(--text-muted); font-size: 13px;">无</div>
-                  </div>
-                  <div>
-                    <div class="case-section-title">测试步骤</div>
-                    <ol>
-                      <li v-for="step in c.steps" :key="step">{{ step }}</li>
-                    </ol>
-                  </div>
-                  <div>
-                    <div class="case-section-title">预期结果</div>
-                    <ul>
-                      <li v-for="res in c.expected_results" :key="res">{{ res }}</li>
-                    </ul>
-                  </div>
-                </div>
-                <div class="case-footer">
-                  <span class="tag-outline" v-for="tag in c.coverage_tags" :key="tag">{{ tag }}</span>
-                  <span class="tag-outline" style="border-color: var(--primary-color); color: var(--primary-color);">来自: {{ c.source_test_point_id }}</span>
-                </div>
-              </div>
-
-              <!-- Validation Issues inline -->
-              <div v-if="generation.validation_issues.length > 0" style="margin-top: 24px;">
-                <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--danger-color);">校验问题 ({{ generation.validation_issues.length }})</h3>
-                <div class="issue-list">
-                  <div class="issue-card" v-for="issue in generation.validation_issues" :key="issue.message">
-                    <div class="cq-title">类型: {{ issue.issue_type }}</div>
-                    <div style="margin-top: 8px; font-size: 14px;">{{ issue.message }}</div>
+                <h2 class="panel-title">用例生成</h2>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="badge badge-success">
+                    {{ generation.cases.length + (integrationResult?.integration_tests.length || 0) }} 条
+                    <template v-if="generatingIntegration"> (联动生成中...)</template>
+                  </span>
+                  <div class="view-toggle" v-if="!generatingIntegration">
+                    <button class="view-toggle-btn" :class="{ active: summaryViewMode === 'list' }" @click="summaryViewMode = 'list'" title="列表视图">
+                      <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    </button>
+                    <button class="view-toggle-btn" :class="{ active: summaryViewMode === 'mindmap' }" @click="summaryViewMode = 'mindmap'" title="思维导图">
+                      <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zm10 0a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path></svg>
+                    </button>
                   </div>
                 </div>
               </div>
 
-              <div class="step-actions">
-                <button class="btn btn-back" @click="goBack">
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                  返回上一步
-                </button>
-                <button
-                  class="btn btn-primary"
-                  :disabled="generatingIntegration"
-                  @click="generateIntegrationTests"
-                >
-                  {{ generatingIntegration ? '正在生成...' : '生成流程联动测试' }}
-                </button>
-              </div>
-            </div>
+              <!-- MindMap View (only when integration is done or no flows) -->
+              <MindMapView
+                v-if="summaryViewMode === 'mindmap' && !generatingIntegration"
+                :api-base-url="apiBaseUrl"
+                :platform="form.platform"
+                :summary="analysis?.summary || {}"
+                :functions="analysis?.functions || []"
+                :test-points="displayedTestPoints"
+                :cases="generation.cases"
+                :integration-tests="integrationResult?.integration_tests || []"
+              />
 
-            <!-- Step 5: Integration Tests -->
-            <div class="panel" v-if="viewStep === 5 && integrationResult">
-              <div class="panel-header">
-                <h2 class="panel-title">流程联动测试</h2>
-                <span class="badge badge-info">{{ integrationResult.integration_tests.length }} 个场景</span>
-              </div>
-
-              <div class="integration-list">
-                <div class="integration-item" v-for="it in integrationResult.integration_tests" :key="it.id">
-                  <div class="integration-header">
-                    <span class="case-id">{{ it.id }}</span>
-                    <span class="case-title">{{ it.title }}</span>
-                  </div>
-                  <div class="integration-desc">{{ it.description }}</div>
-                  <div class="integration-flow-tag">
-                    <span class="tag-filled">{{ it.flow }}</span>
-                  </div>
-                  <div class="integration-body">
-                    <div>
-                      <div class="case-section-title">前置条件</div>
-                      <ul v-if="it.preconditions.length">
-                        <li v-for="pre in it.preconditions" :key="pre">{{ pre }}</li>
-                      </ul>
-                      <div v-else style="color: var(--text-muted); font-size: 13px;">无</div>
-                    </div>
-                    <div>
-                      <div class="case-section-title">执行步骤</div>
-                      <ol>
-                        <li v-for="step in it.steps" :key="step">{{ step }}</li>
-                      </ol>
-                    </div>
-                    <div>
-                      <div class="case-section-title">预期结果</div>
-                      <ul>
-                        <li v-for="res in it.expected_results" :key="res">{{ res }}</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="step-actions">
-                <button class="btn btn-back" @click="goBack">
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                  返回上一步
-                </button>
-                <button class="btn btn-primary" @click="viewStep = 6">
-                  查看用例汇总
-                </button>
-              </div>
-            </div>
-
-            <!-- Step 6: Summary -->
-            <div class="panel" v-if="viewStep === 6 && generation && integrationResult">
-              <div class="panel-header">
-                <h2 class="panel-title">用例汇总</h2>
-                <span class="badge badge-success">共 {{ generation.cases.length + integrationResult.integration_tests.length }} 条</span>
-              </div>
+              <!-- List View -->
+              <template v-if="summaryViewMode === 'list'">
 
               <!-- Stats cards -->
               <div class="summary-stats">
                 <div class="stat-card">
-                  <div class="stat-number">{{ generation.cases.length + integrationResult.integration_tests.length }}</div>
+                  <div class="stat-number">{{ generation.cases.length + (integrationResult?.integration_tests.length || 0) }}</div>
                   <div class="stat-label">用例总数</div>
                 </div>
                 <div class="stat-card">
@@ -788,7 +884,7 @@ onMounted(loadMeta)
                   <div class="stat-label">功能用例</div>
                 </div>
                 <div class="stat-card">
-                  <div class="stat-number" style="color: var(--info-color);">{{ integrationResult.integration_tests.length }}</div>
+                  <div class="stat-number" style="color: var(--info-color);">{{ integrationResult?.integration_tests.length || 0 }}</div>
                   <div class="stat-label">流程联动</div>
                 </div>
                 <div class="stat-card" v-if="generation.validation_issues.length > 0">
@@ -804,7 +900,7 @@ onMounted(loadMeta)
                   :class="{ active: summaryFilter === 'all' }"
                   @click="summaryFilter = 'all'"
                 >
-                  全部 ({{ generation.cases.length + integrationResult.integration_tests.length }})
+                  全部 ({{ generation.cases.length + (integrationResult?.integration_tests.length || 0) }})
                 </button>
                 <button
                   class="filter-btn"
@@ -817,8 +913,10 @@ onMounted(loadMeta)
                   class="filter-btn"
                   :class="{ active: summaryFilter === 'integration' }"
                   @click="summaryFilter = 'integration'"
+                  :disabled="generatingIntegration"
                 >
-                  流程联动 ({{ integrationResult.integration_tests.length }})
+                  流程联动 ({{ integrationResult?.integration_tests.length || 0 }})
+                  <template v-if="generatingIntegration"> ...</template>
                 </button>
               </div>
 
@@ -836,7 +934,7 @@ onMounted(loadMeta)
                       <span class="case-title">{{ c.title }}</span>
                     </div>
                     <div style="display: flex; gap: 6px; align-items: center;">
-                      <span class="badge badge-gray">功能</span>
+                      <span class="tag-filled" v-if="c.function_module">{{ c.function_module }}</span>
                       <span class="badge" :class="c.priority === 'P0' ? 'badge-danger' : 'badge-info'">{{ c.priority }}</span>
                     </div>
                   </div>
@@ -870,43 +968,55 @@ onMounted(loadMeta)
 
               <!-- Integration Tests -->
               <div v-if="summaryFilter !== 'functional'">
-                <div v-if="summaryFilter === 'all'" class="summary-section-title" style="margin-top: 32px;">
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                  流程联动测试
-                  <span class="badge badge-gray">{{ integrationResult.integration_tests.length }}</span>
+                <!-- Loading state -->
+                <div v-if="generatingIntegration" class="integration-loading-banner">
+                  <div class="mindmap-spinner" style="width: 20px; height: 20px; border-width: 2px;"></div>
+                  <span>正在生成流程联动测试用例...</span>
                 </div>
-                <div class="integration-list">
-                  <div class="integration-item" v-for="it in integrationResult.integration_tests" :key="it.id">
-                    <div class="integration-header">
-                      <span class="case-id">{{ it.id }}</span>
-                      <span class="case-title">{{ it.title }}</span>
-                    </div>
-                    <div class="integration-desc">{{ it.description }}</div>
-                    <div class="integration-flow-tag">
-                      <span class="tag-filled">{{ it.flow }}</span>
-                    </div>
-                    <div class="integration-body">
-                      <div>
-                        <div class="case-section-title">前置条件</div>
-                        <ul v-if="it.preconditions.length">
-                          <li v-for="pre in it.preconditions" :key="pre">{{ pre }}</li>
-                        </ul>
-                        <div v-else style="color: var(--text-muted); font-size: 13px;">无</div>
+
+                <template v-else-if="integrationResult && integrationResult.integration_tests.length > 0">
+                  <div v-if="summaryFilter === 'all'" class="summary-section-title" style="margin-top: 32px;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    流程联动测试
+                    <span class="badge badge-gray">{{ integrationResult.integration_tests.length }}</span>
+                  </div>
+                  <div class="integration-list">
+                    <div class="integration-item" v-for="it in integrationResult.integration_tests" :key="it.id">
+                      <div class="integration-header">
+                        <span class="case-id">{{ it.id }}</span>
+                        <span class="case-title">{{ it.title }}</span>
                       </div>
-                      <div>
-                        <div class="case-section-title">执行步骤</div>
-                        <ol>
-                          <li v-for="step in it.steps" :key="step">{{ step }}</li>
-                        </ol>
+                      <div class="integration-desc">{{ it.description }}</div>
+                      <div class="integration-flow-tag">
+                        <span class="tag-filled">{{ it.flow }}</span>
                       </div>
-                      <div>
-                        <div class="case-section-title">预期结果</div>
-                        <ul>
-                          <li v-for="res in it.expected_results" :key="res">{{ res }}</li>
-                        </ul>
+                      <div class="integration-body">
+                        <div>
+                          <div class="case-section-title">前置条件</div>
+                          <ul v-if="it.preconditions.length">
+                            <li v-for="pre in it.preconditions" :key="pre">{{ pre }}</li>
+                          </ul>
+                          <div v-else style="color: var(--text-muted); font-size: 13px;">无</div>
+                        </div>
+                        <div>
+                          <div class="case-section-title">执行步骤</div>
+                          <ol>
+                            <li v-for="step in it.steps" :key="step">{{ step }}</li>
+                          </ol>
+                        </div>
+                        <div>
+                          <div class="case-section-title">预期结果</div>
+                          <ul>
+                            <li v-for="res in it.expected_results" :key="res">{{ res }}</li>
+                          </ul>
+                        </div>
                       </div>
                     </div>
                   </div>
+                </template>
+
+                <div v-else-if="!generatingIntegration && analysis && analysis.flows.length === 0" class="integration-loading-banner" style="color: var(--text-muted);">
+                  未识别到端到端业务流，无流程联动测试
                 </div>
               </div>
 
@@ -925,12 +1035,15 @@ onMounted(loadMeta)
                 </div>
               </div>
 
+              </template><!-- End List View -->
+
               <div class="step-actions">
                 <button class="btn btn-back" @click="goBack">
                   <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
                   返回上一步
                 </button>
-                <span class="badge badge-success" style="font-size: 13px; padding: 6px 16px;">全部流程已完成</span>
+                <span v-if="generatingIntegration" class="badge badge-info" style="font-size: 13px; padding: 6px 16px;">流程联动测试生成中...</span>
+                <span v-else class="badge badge-success" style="font-size: 13px; padding: 6px 16px;">全部流程已完成</span>
               </div>
             </div>
 

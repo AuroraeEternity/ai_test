@@ -14,6 +14,9 @@ from ..models import (
     IntegrationTestsRequest,
     IntegrationTestsResponse,
     MetaResponse,
+    MindMapLLMOutput,
+    MindMapRequest,
+    MindMapResponse,
     PlatformOption,
     PlatformType,
     ProjectOption,
@@ -33,6 +36,8 @@ from ..prompts import (
     build_case_user_prompt,
     build_integration_system_prompt,
     build_integration_user_prompt,
+    build_mindmap_system_prompt,
+    build_mindmap_user_prompt,
     build_review_system_prompt,
     build_review_user_prompt,
 )
@@ -133,6 +138,23 @@ class WorkflowService:
         )
 
     # ------------------------------------------------------------------ #
+    # Stage 7: 思维导图生成（LLM 按测试设计视角输出树结构）
+    # ------------------------------------------------------------------ #
+    async def generate_mindmap(self, payload: MindMapRequest) -> MindMapResponse:
+        system_prompt = build_mindmap_system_prompt()
+        user_prompt = build_mindmap_user_prompt(payload)
+        llm_output = await self._generate_mindmap_with_llm(system_prompt, user_prompt)
+
+        return MindMapResponse(
+            root=llm_output.root,
+            prompts={
+                "mindmap_system_prompt": system_prompt,
+                "mindmap_user_prompt": user_prompt,
+                "execution_mode": "llm",
+            },
+        )
+
+    # ------------------------------------------------------------------ #
     # Meta
     # ------------------------------------------------------------------ #
     def get_meta(self) -> MetaResponse:
@@ -158,13 +180,10 @@ class WorkflowService:
                 ProjectOption(label="Solvely", value="solvely"),
             ],
             workflow_steps=[
-                "选择平台",
-                "输入需求",
-                "AI 结构分析",
-                "缺失检查与澄清",
-                "审核测试点",
-                "生成功能用例",
-                "流程联动测试",
+                "需求输入",
+                "AI 澄清问题",
+                "测试点审核",
+                "用例生成",
             ],
         )
 
@@ -228,6 +247,21 @@ class WorkflowService:
         result = IntegrationTestsLLMOutput.model_validate(raw_result)
         if not result.integration_tests:
             raise ValueError("LLM 未返回任何流程联动测试场景。")
+        return result
+
+    async def _generate_mindmap_with_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> MindMapLLMOutput:
+        raw_result = await self.llm_service.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=MindMapLLMOutput.model_json_schema(),
+        )
+        result = MindMapLLMOutput.model_validate(raw_result)
+        if not result.root.children:
+            raise ValueError("LLM 未返回思维导图子节点。")
         return result
 
     # ================================================================== #

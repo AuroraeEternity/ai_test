@@ -83,17 +83,35 @@ class LLMService:
         )
 
     def _extract_json_content(self, payload: dict[str, Any]) -> dict[str, Any]:
-        message = payload["choices"][0]["message"]
-        content = message.get("content", "")
+        choices = payload.get("choices")
+        if not choices:
+            raise ValueError(f"LLM 响应中无 choices 字段: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
-        if isinstance(content, list):
-            text = "".join(item.get("text", "") for item in content if item.get("type") == "text")
-            return json.loads(text)
+        message = choices[0].get("message", {})
+        content = message.get("content")
 
-        if isinstance(content, str):
-            return json.loads(content)
+        if content is None:
+            finish_reason = choices[0].get("finish_reason", "unknown")
+            raise ValueError(f"LLM 返回 content 为 null，finish_reason={finish_reason}")
 
         if isinstance(content, dict):
             return content
 
-        raise ValueError("LLM 返回内容无法解析为 JSON。")
+        if isinstance(content, list):
+            text = "".join(item.get("text", "") for item in content if item.get("type") == "text")
+        elif isinstance(content, str):
+            text = content
+        else:
+            raise ValueError(f"LLM 返回内容类型异常: {type(content)}")
+
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        if not text:
+            raise ValueError("LLM 返回内容为空字符串")
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"LLM 返回内容 JSON 解析失败: {e}; 原文前200字: {text[:200]}") from e

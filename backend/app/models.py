@@ -72,6 +72,7 @@ class ReviewNote(BaseModel):
 class TestCase(BaseModel):
     id: str
     title: str
+    function_module: str = ""
     case_type: str = "functional"
     priority: Priority = Priority.P1
     requirement_refs: list[str] = Field(default_factory=list)
@@ -152,6 +153,7 @@ class ReviewTestPointsLLMOutput(BaseModel):
 class GenerateCasesRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
+    functions: list[str] = Field(default_factory=list)
     selected_test_points: list[TestPoint] = Field(default_factory=list)
 
 
@@ -185,6 +187,29 @@ class IntegrationTestsLLMOutput(BaseModel):
     integration_tests: list[IntegrationTest] = Field(default_factory=list)
 
 
+class MindMapNode(BaseModel):
+    topic: str
+    children: list["MindMapNode"] = Field(default_factory=list)
+
+
+class MindMapRequest(BaseModel):
+    platform: PlatformType
+    summary: StructuredSummary
+    functions: list[str] = Field(default_factory=list)
+    test_points: list[TestPoint] = Field(default_factory=list)
+    cases: list[TestCase] = Field(default_factory=list)
+    integration_tests: list[IntegrationTest] = Field(default_factory=list)
+
+
+class MindMapResponse(BaseModel):
+    root: MindMapNode
+    prompts: dict[str, str] = Field(default_factory=dict)
+
+
+class MindMapLLMOutput(BaseModel):
+    root: MindMapNode
+
+
 class PlatformOption(BaseModel):
     label: str
     value: PlatformType
@@ -200,3 +225,14 @@ class MetaResponse(BaseModel):
     platforms: list[PlatformOption]
     projects: list[ProjectOption] = Field(default_factory=list)
     workflow_steps: list[str]
+
+
+class HistoryRecord(BaseModel):
+    id: str
+    title: str
+    platform: PlatformType
+    project: str = ""
+    cases_count: int = 0
+    integration_count: int = 0
+    timestamp: str
+    data: dict = Field(default_factory=dict)
