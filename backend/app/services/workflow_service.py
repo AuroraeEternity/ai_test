@@ -16,6 +16,7 @@ from ..models import (
     MetaResponse,
     PlatformOption,
     PlatformType,
+    ProjectOption,
     ReviewTestPointsLLMOutput,
     ReviewTestPointsRequest,
     ReviewTestPointsResponse,
@@ -152,6 +153,9 @@ class WorkflowService:
                     value=PlatformType.PLUGIN,
                     description="适合浏览器插件、IDE 插件、编辑器扩展等",
                 ),
+            ],
+            projects=[
+                ProjectOption(label="Solvely", value="solvely"),
             ],
             workflow_steps=[
                 "选择平台",

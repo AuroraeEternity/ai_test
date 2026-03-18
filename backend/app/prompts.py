@@ -24,11 +24,13 @@ def build_analysis_system_prompt() -> str:
 def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
     # 用户提示词：注入当前任务上下文，要求输出 functions/flows/module_segments。
     clarification_answers = payload.clarification_answers or ["未提供"]
+    project_line = f"所属项目：{payload.project}" if payload.project else "所属项目：未指定"
     return dedent(
         f"""
         当前任务：为功能测试用例生成链路做需求解析。
 
         平台类型：{payload.platform.value}
+        {project_line}
         需求描述：
         {payload.requirement_text}
 

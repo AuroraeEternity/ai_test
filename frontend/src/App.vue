@@ -114,8 +114,14 @@ interface IntegrationTestsResponse {
   prompts: Record<string, string>
 }
 
+interface ProjectOption {
+  label: string
+  value: string
+}
+
 interface MetaResponse {
   platforms: PlatformOption[]
+  projects: ProjectOption[]
   workflow_steps: string[]
 }
 
@@ -126,6 +132,9 @@ const fallbackMeta: MetaResponse = {
     { label: 'Web', value: 'web', description: '后台、官网、表单' },
     { label: 'App', value: 'app', description: 'iOS / Android 客户端' },
     { label: '插件', value: 'plugin', description: '浏览器插件、IDE 扩展等' },
+  ],
+  projects: [
+    { label: 'Solvely', value: 'solvely' },
   ],
   workflow_steps: [
     '输入需求',
@@ -150,6 +159,7 @@ const errorMessage = ref('')
 
 const form = reactive({
   platform: 'web' as Platform,
+  project: '',
   requirementText: '',
   actors: '',
   preconditions: '',
@@ -255,6 +265,7 @@ const analyzeRequirement = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         platform: form.platform,
+        project: form.project,
         requirement_text: form.requirementText,
         actors: formatLines(form.actors),
         preconditions: formatLines(form.preconditions),
@@ -461,6 +472,19 @@ onMounted(loadMeta)
                     <span>{{ platform.description }}</span>
                   </button>
                 </div>
+              </div>
+
+              <div class="form-group" v-if="meta.projects.length">
+                <label class="form-label">
+                  选择项目
+                  <span class="badge badge-gray">可选</span>
+                </label>
+                <select v-model="form.project" class="form-select">
+                  <option value="">不限项目</option>
+                  <option v-for="proj in meta.projects" :key="proj.value" :value="proj.value">
+                    {{ proj.label }}
+                  </option>
+                </select>
               </div>
 
               <div class="form-group">

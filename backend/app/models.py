@@ -100,6 +100,7 @@ class IntegrationTest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     platform: PlatformType
+    project: str = ""
     requirement_text: str = Field(min_length=10)
     business_rules: list[str] = Field(default_factory=list)
     actors: list[str] = Field(default_factory=list)
@@ -190,6 +191,12 @@ class PlatformOption(BaseModel):
     description: str
 
 
+class ProjectOption(BaseModel):
+    label: str
+    value: str
+
+
 class MetaResponse(BaseModel):
     platforms: list[PlatformOption]
+    projects: list[ProjectOption] = Field(default_factory=list)
     workflow_steps: list[str]
