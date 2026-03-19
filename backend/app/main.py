@@ -8,8 +8,12 @@ from .config import get_settings
 from .models import (
     AnalyzeRequest,
     AnalyzeResponse,
+    ClarifyRequest,
+    ClarifyResponse,
     GenerateCasesRequest,
     GenerateCasesResponse,
+    GenerateTestPointsRequest,
+    GenerateTestPointsResponse,
     HistoryRecord,
     IntegrationTestsRequest,
     IntegrationTestsResponse,
@@ -51,6 +55,24 @@ async def get_meta() -> MetaResponse:
 def _err_detail(label: str, exc: Exception) -> str:
     msg = str(exc) or f"{type(exc).__name__}: 请查看后端日志"
     return f"{label}：{msg}"
+
+
+@app.post("/api/workflow/clarify", response_model=ClarifyResponse)
+async def clarify(payload: ClarifyRequest) -> ClarifyResponse:
+    try:
+        return await workflow_service.clarify(payload)
+    except Exception as exc:
+        logger.error("clarify 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("需求澄清失败", exc)) from exc
+
+
+@app.post("/api/workflow/generate-test-points", response_model=GenerateTestPointsResponse)
+async def generate_test_points(payload: GenerateTestPointsRequest) -> GenerateTestPointsResponse:
+    try:
+        return await workflow_service.generate_test_points(payload)
+    except Exception as exc:
+        logger.error("generate-test-points 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("测试点生成失败", exc)) from exc
 
 
 @app.post("/api/workflow/analyze", response_model=AnalyzeResponse)

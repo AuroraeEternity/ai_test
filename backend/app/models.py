@@ -99,6 +99,58 @@ class IntegrationTest(BaseModel):
 
 # --- Request / Response / LLMOutput ---
 
+# ── 澄清阶段 ──────────────────────────────────────────────────────────────────
+
+class ClarifyRequest(BaseModel):
+    platform: PlatformType
+    project: str = ""
+    requirement_text: str = Field(min_length=10)
+    business_rules: list[str] = Field(default_factory=list)
+    actors: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+
+
+class ClarifyResponse(BaseModel):
+    platform: PlatformType
+    summary: StructuredSummary
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    has_blocking_questions: bool = False
+    round: int = 1
+    prompts: dict[str, str] = Field(default_factory=dict)
+
+
+class ClarifyLLMOutput(BaseModel):
+    summary: StructuredSummary
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+
+# ── 测试点生成阶段 ────────────────────────────────────────────────────────────
+
+class GenerateTestPointsRequest(BaseModel):
+    platform: PlatformType
+    summary: StructuredSummary
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+
+
+class GenerateTestPointsResponse(BaseModel):
+    platform: PlatformType
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
+    test_points: list[TestPoint] = Field(default_factory=list)
+    prompts: dict[str, str] = Field(default_factory=dict)
+
+
+class GenerateTestPointsLLMOutput(BaseModel):
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
+    test_points: list[TestPoint] = Field(default_factory=list)
+
+
 class AnalyzeRequest(BaseModel):
     platform: PlatformType
     project: str = ""

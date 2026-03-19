@@ -72,6 +72,25 @@ interface AnalyzeResponse {
   prompts: Record<string, string>
 }
 
+interface ClarifyResponse {
+  platform: Platform
+  summary: StructuredSummary
+  clarification_questions: ClarificationQuestion[]
+  has_blocking_questions: boolean
+  round: number
+  prompts: Record<string, string>
+}
+
+interface GenerateTestPointsResponse {
+  platform: Platform
+  functions: string[]
+  flows: string[]
+  module_segments: Record<string, string>
+  coverage_dimensions: string[]
+  test_points: TestPoint[]
+  prompts: Record<string, string>
+}
+
 interface TestCase {
   id: string
   title: string
@@ -170,7 +189,11 @@ const analyzing = ref(false)
 const reviewing = ref(false)
 const generating = ref(false)
 const generatingIntegration = ref(false)
+const generatingTestPoints = ref(false)
 const errorMessage = ref('')
+const clarifyRound = ref(0)
+const accumulatedAnswers = ref<ClarificationAnswer[]>([])
+const MAX_CLARIFY_ROUNDS = 3
 
 const form = reactive({
   platform: 'web' as Platform,
@@ -199,8 +222,10 @@ const taskActive = ref(false)
 
 const maxReachedStep = computed(() => {
   if (generation.value) return 4
-  if (reviewResult.value || (analysis.value && analysis.value.clarification_questions.length === 0)) return 3
-  if (analysis.value && analysis.value.clarification_questions.length > 0) return 2
+  if (analysis.value?.test_points.length) return 3
+  if (generatingTestPoints.value) return 3
+  if (analysis.value?.clarification_questions.length) return 2
+  if (analyzing.value) return 2
   return 1
 })
 
@@ -232,6 +257,40 @@ const selectedTestPoints = computed(() =>
   displayedTestPoints.value.filter((item) => selectedTestPointIds.value.includes(item.id)),
 )
 
+const notesByTestPoint = computed(() => {
+  const map: Record<string, ReviewNote[]> = {}
+  if (!reviewResult.value) return map
+  for (const note of reviewResult.value.review_notes) {
+    const tpId = note.target_test_point_id || '__global__'
+    if (!map[tpId]) map[tpId] = []
+    map[tpId].push(note)
+  }
+  return map
+})
+
+const reviewStats = computed(() => {
+  if (!reviewResult.value || !analysis.value) return null
+  const origIds = new Set(analysis.value.test_points.map(t => t.id))
+  const reviewedIds = new Set(reviewResult.value.reviewed_test_points.map(t => t.id))
+  const addedItems = reviewResult.value.reviewed_test_points.filter(t => !origIds.has(t.id))
+  const removedItems = analysis.value.test_points.filter(t => !reviewedIds.has(t.id))
+  return {
+    added: addedItems.length,
+    removed: removedItems.length,
+    notesCount: reviewResult.value.review_notes.length,
+    addedItems,
+    removedItems,
+    notes: reviewResult.value.review_notes,
+  }
+})
+
+const addedTestPointIds = computed(() => {
+  if (!reviewStats.value) return new Set<string>()
+  return new Set(reviewStats.value.addedItems.map(t => t.id))
+})
+
+const reviewDetailExpanded = ref(false)
+
 const issuesByCase = computed(() => {
   const map: Record<string, ValidationIssue[]> = {}
   if (!generation.value) return map
@@ -242,17 +301,6 @@ const issuesByCase = computed(() => {
     map[caseId].push(issue)
   }
   return map
-})
-
-const clarificationAnswerList = computed<ClarificationAnswer[]>(() => {
-  if (!analysis.value) return []
-  return analysis.value.clarification_questions
-    .map((item) => ({
-      question_id: item.id,
-      question: item.question,
-      answer: clarificationAnswers[item.id]?.trim() || '',
-    }))
-    .filter((item) => item.answer)
 })
 
 const blockingQuestions = computed(() => {
@@ -285,35 +333,130 @@ const loadMeta = async () => {
   }
 }
 
-const analyzeRequirement = async () => {
+const startClarify = async () => {
   errorMessage.value = ''
   analyzing.value = true
+  clarifyRound.value = 0
+  accumulatedAnswers.value = []
   reviewResult.value = null
   generation.value = null
   integrationResult.value = null
+  Object.keys(clarificationAnswers).forEach(k => delete clarificationAnswers[k])
+
   try {
-    const response = await fetch(`${apiBaseUrl}/api/workflow/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: form.platform,
-        project: form.project,
-        requirement_text: form.requirementText,
-        actors: formatLines(form.actors),
-        preconditions: formatLines(form.preconditions),
-        business_rules: formatLines(form.businessRules),
-        clarification_answers: clarificationAnswerList.value,
-      }),
-    })
-    if (!response.ok) throw new Error(await extractErrorMessage(response, '需求解析失败，请检查后端服务'))
-    const data = (await response.json()) as AnalyzeResponse
-    analysis.value = data
-    selectedTestPointIds.value = data.test_points.map((item) => item.id)
-    viewStep.value = data.clarification_questions.length > 0 ? 2 : 3
+    const result = await callClarifyApi([])
+    clarifyRound.value = 1
+    analysis.value = {
+      platform: result.platform,
+      summary: result.summary,
+      functions: [],
+      flows: [],
+      module_segments: {},
+      coverage_dimensions: [],
+      clarification_questions: result.clarification_questions,
+      test_points: [],
+      prompts: result.prompts,
+    }
+    if (result.clarification_questions.length > 0) {
+      viewStep.value = 2
+    } else {
+      await doGenerateTestPoints(result.summary, [])
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '需求解析失败'
   } finally {
     analyzing.value = false
+  }
+}
+
+const callClarifyApi = async (answers: ClarificationAnswer[]): Promise<ClarifyResponse> => {
+  const response = await fetch(`${apiBaseUrl}/api/workflow/clarify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      platform: form.platform,
+      project: form.project,
+      requirement_text: form.requirementText,
+      actors: formatLines(form.actors),
+      preconditions: formatLines(form.preconditions),
+      business_rules: formatLines(form.businessRules),
+      clarification_answers: answers,
+    }),
+  })
+  if (!response.ok) throw new Error(await extractErrorMessage(response, '需求解析失败，请检查后端服务'))
+  return (await response.json()) as ClarifyResponse
+}
+
+const submitClarifyAnswers = async () => {
+  if (!analysis.value) return
+  errorMessage.value = ''
+  analyzing.value = true
+
+  // 合并本轮答案到累积列表
+  const existingIds = new Set(accumulatedAnswers.value.map(a => a.question_id))
+  const newAnswers: ClarificationAnswer[] = analysis.value.clarification_questions
+    .filter(q => clarificationAnswers[q.id]?.trim())
+    .map(q => ({ question_id: q.id, question: q.question, answer: clarificationAnswers[q.id].trim() }))
+    .filter(a => !existingIds.has(a.question_id))
+  const merged = [...accumulatedAnswers.value, ...newAnswers]
+  accumulatedAnswers.value = merged
+
+  try {
+    if (clarifyRound.value >= MAX_CLARIFY_ROUNDS) {
+      await doGenerateTestPoints(analysis.value.summary, merged)
+      return
+    }
+    const result = await callClarifyApi(merged)
+    clarifyRound.value++
+    analysis.value = { ...analysis.value, summary: result.summary, clarification_questions: result.clarification_questions }
+
+    if (result.clarification_questions.length > 0 && clarifyRound.value < MAX_CLARIFY_ROUNDS) {
+      Object.keys(clarificationAnswers).forEach(k => delete clarificationAnswers[k])
+      viewStep.value = 2
+    } else {
+      await doGenerateTestPoints(result.summary, merged)
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '需求澄清失败'
+  } finally {
+    analyzing.value = false
+  }
+}
+
+const skipClarification = async () => {
+  if (!analysis.value) return
+  errorMessage.value = ''
+  try {
+    await doGenerateTestPoints(analysis.value.summary, accumulatedAnswers.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '测试点生成失败'
+  }
+}
+
+const doGenerateTestPoints = async (summary: StructuredSummary, answers: ClarificationAnswer[]) => {
+  generatingTestPoints.value = true
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/workflow/generate-test-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: form.platform, summary, clarification_answers: answers }),
+    })
+    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试点生成失败'))
+    const data = (await response.json()) as GenerateTestPointsResponse
+    analysis.value = {
+      ...analysis.value!,
+      functions: data.functions,
+      flows: data.flows,
+      module_segments: data.module_segments,
+      coverage_dimensions: data.coverage_dimensions,
+      test_points: data.test_points,
+    }
+    selectedTestPointIds.value = data.test_points.map(t => t.id)
+    viewStep.value = 3
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '测试点生成失败'
+  } finally {
+    generatingTestPoints.value = false
   }
 }
 
@@ -334,7 +477,7 @@ const reviewTestPoints = async () => {
       body: JSON.stringify({
         platform: form.platform,
         summary: analysis.value.summary,
-        clarification_answers: clarificationAnswerList.value,
+        clarification_answers: accumulatedAnswers.value,
         test_points: analysis.value.test_points,
       }),
     })
@@ -513,7 +656,7 @@ onMounted(() => { loadMeta(); loadHistory() })
   <div class="app-wrapper">
     <!-- Sidebar -->
     <aside class="app-sidebar">
-      <div class="sidebar-logo">
+      <div class="sidebar-logo" @click="taskActive = false" style="cursor:pointer;" title="返回首页">
         <svg class="nav-icon" style="margin-right: 8px; color: var(--primary-color);" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
         <span>AI Test</span>
         <span
@@ -570,55 +713,72 @@ onMounted(() => { loadMeta(); loadHistory() })
       <!-- Welcome Page -->
       <div v-if="!taskActive" class="welcome-page">
         <div class="welcome-content">
-          <div class="welcome-icon">
-            <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+          <!-- Hero Section -->
+          <div class="welcome-hero">
+            <div class="welcome-hero-badge">Powered by LLM</div>
+            <h1 class="welcome-title">AI 智能测试用例工作台</h1>
+            <p class="welcome-desc">从需求文档到结构化测试用例，AI 全程辅助：多轮澄清消除歧义、智能提取测试点、自动生成功能用例与集成测试。</p>
+            <button class="btn btn-primary welcome-start" @click="taskActive = true; historyExpanded = true; viewStep = 1">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+              新建测试任务
+            </button>
           </div>
-          <h1 class="welcome-title">AI 智能测试用例生成</h1>
-          <p class="welcome-desc">基于大语言模型，从需求文档自动生成结构化、高覆盖的功能测试用例与流程联动测试场景。</p>
 
-          <div class="welcome-features">
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-              </div>
-              <div>
-                <div class="welcome-feature-title">需求智能解析</div>
-                <div class="welcome-feature-desc">自动提取功能模块、业务流程、前置条件</div>
-              </div>
-            </div>
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
-              </div>
-              <div>
-                <div class="welcome-feature-title">测试点审核</div>
-                <div class="welcome-feature-desc">AI 生成测试点，人工审核确认后再生成用例</div>
-              </div>
-            </div>
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-              </div>
-              <div>
-                <div class="welcome-feature-title">流程联动测试</div>
-                <div class="welcome-feature-desc">自动识别端到端业务流，生成跨模块集成测试</div>
-              </div>
-            </div>
-            <div class="welcome-feature">
-              <div class="welcome-feature-icon">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
-              </div>
-              <div>
-                <div class="welcome-feature-title">质量校验</div>
-                <div class="welcome-feature-desc">自动检测覆盖遗漏、重复用例、步骤完整性</div>
+          <!-- Workflow Steps -->
+          <div class="welcome-workflow">
+            <div class="welcome-section-label">工作流程</div>
+            <div class="welcome-steps">
+              <div class="welcome-step" v-for="(s, i) in [
+                { title: '需求输入', desc: '粘贴 PRD 或需求描述，选择平台类型' },
+                { title: 'AI 多轮澄清', desc: '识别歧义与缺失，多轮问答消除盲区' },
+                { title: '测试点审核', desc: 'AI 提取测试点，人工勾选确认' },
+                { title: '用例生成', desc: '功能用例 + 集成测试 + 思维导图' },
+              ]" :key="i">
+                <div class="welcome-step-header">
+                  <div class="welcome-step-num">{{ i + 1 }}</div>
+                  <div class="welcome-step-line" v-if="i < 3"></div>
+                </div>
+                <div class="welcome-step-title">{{ s.title }}</div>
+                <div class="welcome-step-desc">{{ s.desc }}</div>
               </div>
             </div>
           </div>
 
-          <button class="btn btn-primary welcome-start" @click="taskActive = true; historyExpanded = true; viewStep = 1">
-            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-            新建测试任务
-          </button>
+          <!-- Capability Cards -->
+          <div class="welcome-capabilities">
+            <div class="welcome-section-label">核心能力</div>
+            <div class="welcome-cap-grid">
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background:#EEF2FF;color:#6366F1;">
+                  <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                </div>
+                <div class="welcome-cap-title">多轮需求澄清</div>
+                <div class="welcome-cap-desc">最多 3 轮 AI 追问，自动识别阻塞性问题，确保需求理解完整再生成测试点</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background:#FEF3C7;color:#D97706;">
+                  <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+                </div>
+                <div class="welcome-cap-title">测试点人工审核</div>
+                <div class="welcome-cap-desc">AI 辅助审核标注新增/移除/意见，支持勾选过滤，人工掌控最终测试范围</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background:#ECFDF5;color:#059669;">
+                  <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                </div>
+                <div class="welcome-cap-title">集成测试自动生成</div>
+                <div class="welcome-cap-desc">识别端到端业务流，自动生成跨模块流程联动测试场景</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background:#FDF2F8;color:#DB2777;">
+                  <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                </div>
+                <div class="welcome-cap-title">质量校验 + 思维导图</div>
+                <div class="welcome-cap-desc">自动检测覆盖遗漏与重复，生成测试设计思维导图可一键复制到飞书</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -728,10 +888,10 @@ onMounted(() => { loadMeta(); loadHistory() })
                 <div></div>
                 <button
                   class="btn btn-primary"
-                  :disabled="analyzing || !form.requirementText.trim()"
-                  @click="analyzeRequirement"
+                  :disabled="analyzing || generatingTestPoints || !form.requirementText.trim()"
+                  @click="startClarify"
                 >
-                  {{ analyzing ? '正在深度解析...' : (analysis ? '重新解析需求' : '开始智能解析') }}
+                  {{ (analyzing || generatingTestPoints) ? '正在深度解析...' : (analysis ? '重新解析需求' : '开始智能解析') }}
                 </button>
               </div>
             </div>
@@ -740,6 +900,7 @@ onMounted(() => { loadMeta(); loadHistory() })
             <div class="panel" v-if="viewStep === 2 && analysis && analysis.clarification_questions.length > 0">
               <div class="panel-header">
                 <h2 class="panel-title">AI 澄清问题</h2>
+                <span class="badge badge-info" style="font-size:12px;">第 {{ clarifyRound }} 轮 / 最多 {{ MAX_CLARIFY_ROUNDS }} 轮</span>
                 <span class="badge badge-warning" v-if="hasUnansweredBlocking">存在待确认的阻塞问题</span>
                 <span class="badge badge-success" v-else>问题已确认</span>
               </div>
@@ -771,13 +932,22 @@ onMounted(() => { loadMeta(); loadHistory() })
                   <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
                   返回上一步
                 </button>
-                <button
-                  class="btn btn-primary"
-                  :disabled="reviewing"
-                  @click="reviewTestPoints"
-                >
-                  {{ reviewing ? '正在审核...' : '应用答案并进入审核' }}
-                </button>
+                <div style="display:flex;gap:8px;">
+                  <button
+                    class="btn btn-back"
+                    :disabled="analyzing || generatingTestPoints"
+                    @click="skipClarification"
+                  >
+                    {{ generatingTestPoints ? '生成中...' : '跳过，直接生成测试点' }}
+                  </button>
+                  <button
+                    class="btn btn-primary"
+                    :disabled="analyzing || generatingTestPoints || hasUnansweredBlocking"
+                    @click="submitClarifyAnswers"
+                  >
+                    {{ analyzing ? '处理中...' : (clarifyRound >= MAX_CLARIFY_ROUNDS ? '提交并生成测试点' : '提交答案') }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -785,7 +955,60 @@ onMounted(() => { loadMeta(); loadHistory() })
             <div class="panel" v-if="viewStep === 3 && analysis">
               <div class="panel-header">
                 <h2 class="panel-title">测试点审核</h2>
-                <span class="badge badge-gray">{{ displayedTestPoints.length }} 项</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span class="badge badge-gray">{{ displayedTestPoints.length }} 项</span>
+                  <button
+                    class="btn btn-outline-primary btn-sm"
+                    :disabled="reviewing"
+                    @click="reviewTestPoints"
+                  >
+                    {{ reviewing ? 'AI 审核中...' : (reviewResult ? '重新 AI 审核' : 'AI 辅助审核') }}
+                  </button>
+                </div>
+              </div>
+
+              <!-- 审核结果摘要 -->
+              <div v-if="reviewResult && reviewStats" class="review-summary-panel">
+                <div class="review-summary-bar" @click="reviewDetailExpanded = !reviewDetailExpanded" style="cursor:pointer;">
+                  <span class="review-summary-label">AI 审核完成</span>
+                  <span v-if="reviewStats.added" class="badge badge-success">新增 {{ reviewStats.added }} 项</span>
+                  <span v-if="reviewStats.removed" class="badge badge-danger">移除 {{ reviewStats.removed }} 项</span>
+                  <span v-if="reviewStats.notesCount" class="badge badge-warning">{{ reviewStats.notesCount }} 条审核意见</span>
+                  <span v-if="!reviewStats.added && !reviewStats.removed && !reviewStats.notesCount" class="badge badge-info">无调整</span>
+                  <span class="review-expand-icon" :class="{ expanded: reviewDetailExpanded }">▶</span>
+                </div>
+
+                <div v-if="reviewDetailExpanded" class="review-detail-section">
+                  <!-- 新增的测试点 -->
+                  <div v-if="reviewStats.addedItems.length" class="review-detail-group">
+                    <div class="review-detail-group-title review-added-title">新增的测试点</div>
+                    <div v-for="tp in reviewStats.addedItems" :key="tp.id" class="review-detail-item review-added-item">
+                      <span class="review-detail-item-title">{{ tp.title }}</span>
+                      <span class="review-detail-item-desc">{{ tp.description }}</span>
+                      <span class="review-detail-item-meta">分类: {{ tp.category }} · 来源: {{ tp.source }}</span>
+                    </div>
+                  </div>
+
+                  <!-- 移除的测试点 -->
+                  <div v-if="reviewStats.removedItems.length" class="review-detail-group">
+                    <div class="review-detail-group-title review-removed-title">移除的测试点</div>
+                    <div v-for="tp in reviewStats.removedItems" :key="tp.id" class="review-detail-item review-removed-item">
+                      <span class="review-detail-item-title">{{ tp.title }}</span>
+                      <span class="review-detail-item-desc">{{ tp.description }}</span>
+                      <span class="review-detail-item-meta">分类: {{ tp.category }} · 来源: {{ tp.source }}</span>
+                    </div>
+                  </div>
+
+                  <!-- 全部审核意见 -->
+                  <div v-if="reviewStats.notes.length" class="review-detail-group">
+                    <div class="review-detail-group-title review-notes-title">审核意见</div>
+                    <div v-for="note in reviewStats.notes" :key="note.message" class="review-detail-note-item" :class="'severity-' + note.severity">
+                      <span class="review-detail-note-type">[{{ note.note_type }}]</span>
+                      <span class="review-detail-note-msg">{{ note.message }}</span>
+                      <span v-if="note.target_test_point_id" class="review-detail-note-target">关联: {{ note.target_test_point_id }}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div class="tp-toolbar">
@@ -796,13 +1019,6 @@ onMounted(() => { loadMeta(); loadHistory() })
                 <div style="display: flex; gap: 12px;">
                   <button class="btn btn-default" @click="selectAllTestPoints">全选</button>
                   <button class="btn btn-default" @click="clearSelection">清空</button>
-                </div>
-              </div>
-
-              <div v-if="reviewResult?.review_notes.length" class="review-notes-box">
-                <div class="list-title">AI 审核意见 (基于您的澄清补充)</div>
-                <div class="review-note-item" v-for="note in reviewResult.review_notes" :key="note.message">
-                  <strong>[{{ note.note_type }}]</strong> {{ note.message }}
                 </div>
               </div>
 
@@ -822,6 +1038,7 @@ onMounted(() => { loadMeta(); loadHistory() })
                   <div class="tp-main">
                     <div class="tp-title-row">
                       <span class="tp-title">{{ tp.title }}</span>
+                      <span v-if="addedTestPointIds.has(tp.id)" class="badge badge-success">新增</span>
                       <span class="badge" :class="tp.risk_level === 'high' ? 'badge-danger' : (tp.risk_level === 'medium' ? 'badge-warning' : 'badge-info')">
                         {{ tp.risk_level === 'high' ? '高风险' : (tp.risk_level === 'medium' ? '中风险' : '低风险') }}
                       </span>
@@ -831,6 +1048,13 @@ onMounted(() => { loadMeta(); loadHistory() })
                       <span>来源: {{ tp.source }}</span>
                       <span>分类: {{ tp.category }}</span>
                       <span v-if="tp.platform_specific" style="color: var(--primary-color); font-weight: 600;">特定平台专项</span>
+                    </div>
+                    <!-- 关联到该测试点的审核意见 -->
+                    <div v-if="notesByTestPoint[tp.id]?.length" class="tp-review-notes">
+                      <div v-for="note in notesByTestPoint[tp.id]" :key="note.message" class="tp-review-note-tag" :class="'severity-' + note.severity">
+                        <span class="tp-review-note-type">[{{ note.note_type }}]</span>
+                        {{ note.message }}
+                      </div>
                     </div>
                   </div>
                 </label>

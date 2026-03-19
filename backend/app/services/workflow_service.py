@@ -7,9 +7,15 @@ from ..models import (
     AnalyzeLLMOutput,
     AnalyzeRequest,
     AnalyzeResponse,
+    ClarifyLLMOutput,
+    ClarifyRequest,
+    ClarifyResponse,
     GenerateCasesLLMOutput,
     GenerateCasesRequest,
     GenerateCasesResponse,
+    GenerateTestPointsLLMOutput,
+    GenerateTestPointsRequest,
+    GenerateTestPointsResponse,
     IntegrationTestsLLMOutput,
     IntegrationTestsRequest,
     IntegrationTestsResponse,
@@ -34,6 +40,10 @@ from ..prompts import (
     build_analysis_user_prompt,
     build_case_system_prompt,
     build_case_user_prompt,
+    build_clarify_system_prompt,
+    build_clarify_user_prompt,
+    build_generate_test_points_system_prompt,
+    build_generate_test_points_user_prompt,
     build_integration_system_prompt,
     build_integration_user_prompt,
     build_mindmap_system_prompt,
@@ -50,8 +60,60 @@ class WorkflowService:
         self.llm_service = LLMService(self.settings)
 
     # ------------------------------------------------------------------ #
-    # Stage 1-3: 结构分析 + 缺失检查 + 模块拆分（合并为一次 LLM 调用）
+    # Stage 0: 需求澄清（可多轮循环，直到无 blocking 问题）
     # ------------------------------------------------------------------ #
+    async def clarify(self, payload: ClarifyRequest) -> ClarifyResponse:
+        system_prompt = build_clarify_system_prompt()
+        user_prompt = build_clarify_user_prompt(payload)
+        raw_result = await self.llm_service.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=ClarifyLLMOutput.model_json_schema(),
+        )
+        result = ClarifyLLMOutput.model_validate(raw_result)
+        has_blocking = any(q.blocking for q in result.clarification_questions)
+        round_num = len({a.question_id for a in payload.clarification_answers}) + 1
+        return ClarifyResponse(
+            platform=payload.platform,
+            summary=result.summary,
+            clarification_questions=result.clarification_questions,
+            has_blocking_questions=has_blocking,
+            round=round_num,
+            prompts={
+                "clarify_system_prompt": system_prompt,
+                "clarify_user_prompt": user_prompt,
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Stage 1: 测试点生成（澄清完成后调用一次）
+    # ------------------------------------------------------------------ #
+    async def generate_test_points(self, payload: GenerateTestPointsRequest) -> GenerateTestPointsResponse:
+        system_prompt = build_generate_test_points_system_prompt()
+        user_prompt = build_generate_test_points_user_prompt(payload)
+        raw_result = await self.llm_service.generate_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_schema=GenerateTestPointsLLMOutput.model_json_schema(),
+        )
+        result = GenerateTestPointsLLMOutput.model_validate(raw_result)
+        if not result.test_points:
+            raise ValueError("LLM 未返回 test_points。")
+        return GenerateTestPointsResponse(
+            platform=payload.platform,
+            functions=result.functions,
+            flows=result.flows,
+            module_segments=result.module_segments,
+            coverage_dimensions=result.coverage_dimensions,
+            test_points=result.test_points,
+            prompts={
+                "test_points_system_prompt": system_prompt,
+                "test_points_user_prompt": user_prompt,
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Stage 2-4: 结构分析 + 缺失检查 + 模块拆分（保留旧接口）
     async def analyze(self, payload: AnalyzeRequest) -> AnalyzeResponse:
         system_prompt = build_analysis_system_prompt()
         user_prompt = build_analysis_user_prompt(payload)

@@ -1,6 +1,105 @@
 from textwrap import dedent
 
-from .models import AnalyzeRequest, GenerateCasesRequest, IntegrationTestsRequest, MindMapRequest, ReviewTestPointsRequest
+from .models import AnalyzeRequest, ClarifyRequest, GenerateCasesRequest, GenerateTestPointsRequest, IntegrationTestsRequest, MindMapRequest, ReviewTestPointsRequest
+
+
+# ── 澄清阶段 ──────────────────────────────────────────────────────────────────
+
+def build_clarify_system_prompt() -> str:
+    return dedent(
+        """
+        你是一名高级测试分析专家，负责理解原始需求并识别需要澄清的关键问题。
+        输出时必须遵守以下原则：
+        1. 先梳理需求，提炼结构化摘要（summary）。
+        2. 识别需求中的歧义、缺失边界、不明确的预期行为和缺失的状态流转。
+        3. 只列出真正影响测试设计的问题，不要无意义地追问细节。
+        4. 如果已有澄清回答，根据回答更新摘要，并判断是否还有新的疑问。
+        5. 如果需求已足够清晰，clarification_questions 返回空数组。
+        6. 你必须严格输出 JSON，不要输出解释性文字。
+        """
+    ).strip()
+
+
+def build_clarify_user_prompt(payload: ClarifyRequest) -> str:
+    round_num = len({a.question_id for a in payload.clarification_answers}) + 1
+    round_label = "首次分析" if not payload.clarification_answers else f"第 {round_num} 轮澄清"
+    project_line = f"所属项目：{payload.project}" if payload.project else ""
+    answers_section = ""
+    if payload.clarification_answers:
+        answers_text = "\n".join(
+            f"  Q: {a.question}\n  A: {a.answer}" for a in payload.clarification_answers
+        )
+        answers_section = f"\n已获得的澄清回答：\n{answers_text}\n"
+    return dedent(
+        f"""
+        当前任务：理解需求，识别需要澄清的问题（{round_label}）。
+
+        平台类型：{payload.platform.value}
+        {project_line}
+        需求描述：
+        {payload.requirement_text}
+
+        补充角色：{payload.actors or ['未提供']}
+        补充前置条件：{payload.preconditions or ['未提供']}
+        补充业务规则：{payload.business_rules or ['未提供']}
+        {answers_section}
+        请完成：
+        1. 提炼结构化摘要（summary），如已有澄清回答请据此更新。
+        2. 列出仍需澄清的问题（clarification_questions）：
+           - blocking=true：不回答则无法准确生成测试点
+           - blocking=false：可选，回答后能提升质量
+        3. 如果需求已足够清晰，clarification_questions 返回空数组。
+        """
+    ).strip()
+
+
+# ── 测试点生成阶段 ────────────────────────────────────────────────────────────
+
+def build_generate_test_points_system_prompt() -> str:
+    return dedent(
+        """
+        你是一名高级测试分析专家，负责在需求完全确认后生成全面的测试点。
+        输出时必须遵守以下原则：
+        1. 基于已确认的需求和所有澄清信息，提取功能模块、业务流和测试点。
+        2. 所有测试点都必须能回溯到需求或平台特性。
+        3. 先提取 functions / flows / module_segments，再从覆盖维度生成 test_points。
+        4. 你必须严格输出 JSON，不要输出解释性文字。
+        """
+    ).strip()
+
+
+def build_generate_test_points_user_prompt(payload: GenerateTestPointsRequest) -> str:
+    answers_section = ""
+    if payload.clarification_answers:
+        answers_text = "\n".join(
+            f"  Q: {a.question}\n  A: {a.answer}" for a in payload.clarification_answers
+        )
+        answers_section = f"\n澄清确认信息（已确认）：\n{answers_text}\n"
+    return dedent(
+        f"""
+        当前任务：基于已确认需求，提取功能模块并生成测试点。
+
+        平台类型：{payload.platform.value}
+        结构化摘要：
+        - 功能标题：{payload.summary.title}
+        - 业务目标：{payload.summary.business_goal}
+        - 角色：{payload.summary.actors}
+        - 前置条件：{payload.summary.preconditions}
+        - 主流程：{payload.summary.main_flow}
+        - 异常流程：{payload.summary.exception_flows}
+        - 业务规则：{payload.summary.business_rules}
+        - 平台关注点：{payload.summary.platform_focus}
+        {answers_section}
+        请完成：
+        1. 提取功能模块列表（functions），如 ["登录", "会话建立", "首页跳转"]。
+        2. 提取端到端业务流（flows），如 ["输入账号->输入密码->点击登录->校验->跳转"]。
+        3. 按模块拆分需求片段（module_segments），格式为 {{"模块名": "对应需求描述"}}。
+        4. 基于以下覆盖维度提取测试点（test_points）：
+           正向流程 / 必填非必填 / 等价类 / 边界值 / 非法输入 /
+           状态流转 / 权限控制 / 异常处理 / 平台特性
+        5. 每个 test_point 包含 id、title、category、description、source、risk_level、platform_specific。
+        """
+    ).strip()
 
 
 def build_analysis_system_prompt() -> str:

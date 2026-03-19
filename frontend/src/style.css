@@ -245,83 +245,167 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .welcome-page {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 48px 32px;
+  padding: 40px 32px;
+  overflow-y: auto;
 }
 .welcome-content {
-  max-width: 560px;
-  text-align: center;
+  max-width: 720px;
+  width: 100%;
 }
-.welcome-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 80px;
-  height: 80px;
-  border-radius: 20px;
-  background: #EEF2FF;
+
+/* Hero */
+.welcome-hero {
+  text-align: center;
+  padding-bottom: 36px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 32px;
+}
+.welcome-hero-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
   color: var(--primary-color);
-  margin-bottom: 24px;
+  background: #EEF2FF;
+  padding: 4px 12px;
+  border-radius: 20px;
+  margin-bottom: 16px;
 }
 .welcome-title {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
   color: var(--text-main);
   margin-bottom: 12px;
+  letter-spacing: -0.3px;
 }
 .welcome-desc {
   font-size: 15px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   line-height: 1.7;
-  margin-bottom: 36px;
+  margin-bottom: 28px;
+  max-width: 540px;
+  margin-left: auto;
+  margin-right: auto;
 }
-.welcome-features {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  text-align: left;
-  margin-bottom: 36px;
+.welcome-start {
+  padding: 10px 24px;
+  font-size: 14px;
+  gap: 6px;
 }
-.welcome-feature {
+
+/* Section Label */
+.welcome-section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+/* Workflow Steps - Stepper */
+.welcome-workflow {
+  margin-bottom: 32px;
+}
+.welcome-steps {
   display: flex;
-  gap: 12px;
-  padding: 16px;
-  background: var(--surface-color);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  transition: border-color 0.2s;
+  gap: 0;
 }
-.welcome-feature:hover {
-  border-color: #C7D2FE;
+.welcome-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
 }
-.welcome-feature-icon {
+.welcome-step-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 12px;
+  justify-content: center;
+  position: relative;
+}
+.welcome-step-num {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: #EEF2FF;
-  color: var(--primary-color);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 1;
 }
-.welcome-feature-title {
-  font-size: 13px;
+.welcome-step-line {
+  position: absolute;
+  left: calc(50% + 18px);
+  right: calc(-50% + 18px);
+  top: 50%;
+  height: 2px;
+  background: #C7D2FE;
+  z-index: 0;
+}
+.welcome-step-title {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-main);
-  margin-bottom: 3px;
+  margin-bottom: 4px;
 }
-.welcome-feature-desc {
+.welcome-step-desc {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.5;
+  padding: 0 8px;
 }
-.welcome-start {
-  padding: 12px 28px;
-  font-size: 15px;
-  gap: 8px;
+
+/* Capability Cards */
+.welcome-capabilities {
+  margin-bottom: 32px;
 }
+.welcome-cap-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.welcome-cap-card {
+  padding: 18px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.welcome-cap-card:hover {
+  border-color: #C7D2FE;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.06);
+}
+.welcome-cap-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.welcome-cap-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+.welcome-cap-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
 
 
 /* Step Progress Bar */
@@ -1222,4 +1306,186 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px dashed var(--border-color);
+}
+
+/* AI 审核按钮 */
+.btn-outline-primary {
+  background: transparent;
+  border: 1px solid var(--primary-color);
+  color: var(--primary-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 12px;
+  transition: all 0.15s;
+}
+.btn-outline-primary:hover:not(:disabled) {
+  background: var(--primary-color);
+  color: white;
+}
+.btn-outline-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.review-summary-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #166534;
+}
+
+/* 审核意见严重程度 */
+.review-note-severity {
+  font-weight: 600;
+}
+.severity-high { color: #DC2626; }
+.severity-medium { color: #D97706; }
+.severity-low { color: #6B7280; }
+
+/* 测试点卡片内联审核意见 */
+.tp-review-notes {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tp-review-note-tag {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.tp-review-note-tag.severity-high {
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  color: #991B1B;
+}
+.tp-review-note-tag.severity-medium {
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  color: #92400E;
+}
+.tp-review-note-tag.severity-low {
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  color: #6B7280;
+}
+.tp-review-note-type {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* 审核详情面板 */
+.review-summary-panel {
+  margin-bottom: 16px;
+}
+.review-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #F0FDF4;
+  border: 1px solid #BBF7D0;
+  border-radius: 8px;
+}
+.review-expand-icon {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+.review-expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.review-detail-section {
+  margin-top: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.review-detail-group {
+  padding: 12px 16px;
+}
+.review-detail-group:not(:last-child) {
+  border-bottom: 1px solid var(--border-color);
+}
+.review-detail-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.review-added-title { color: #166534; }
+.review-removed-title { color: #991B1B; }
+.review-notes-title { color: #92400E; }
+
+.review-detail-item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.review-added-item {
+  background: #F0FDF4;
+  border: 1px solid #BBF7D0;
+}
+.review-removed-item {
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+.review-detail-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.review-detail-item-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.review-detail-item-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.review-detail-note-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.review-detail-note-item.severity-high {
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+}
+.review-detail-note-item.severity-medium {
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+}
+.review-detail-note-item.severity-low {
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+}
+.review-detail-note-type {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.review-detail-note-msg {
+  flex: 1;
+}
+.review-detail-note-target {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
