@@ -117,7 +117,16 @@ def build_case_system_prompt() -> str:
 
 
 def build_case_user_prompt(payload: GenerateCasesRequest) -> str:
-    selected_titles = [item.title for item in payload.selected_test_points]
+    selected_points_detail = "\n".join(
+        f"- [{item.id}][{item.category}][风险:{item.risk_level.value}] {item.title}\n"
+        f"  描述：{item.description}\n"
+        f"  来源：{item.source}"
+        for item in payload.selected_test_points
+    )
+    module_segments_section = ""
+    if payload.module_segments:
+        segments_text = "\n".join(f"  [{mod}]：{seg}" for mod, seg in payload.module_segments.items())
+        module_segments_section = f"\n模块需求片段：\n{segments_text}\n"
     return dedent(
         f"""
         当前任务：生成功能测试用例。
@@ -135,16 +144,17 @@ def build_case_user_prompt(payload: GenerateCasesRequest) -> str:
 
         功能模块列表（functions）：
         {payload.functions}
-
-        已确认测试点：
-        {selected_titles}
+        {module_segments_section}
+        已确认测试点（包含完整细节）：
+        {selected_points_detail}
 
         输出要求：
         1. 使用标准化测试用例模板。
-        2. 优先覆盖高风险测试点。
+        2. 优先覆盖高风险（risk_level=high）测试点。
         3. 每条测试用例必须标注 function_module，取值必须来自上方的功能模块列表。
         4. 每条测试用例要包含 coverage_tags，并体现平台特性。
-        5. 每条 cases 记录都需要包含 id、title、function_module、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
+        5. source_test_point_id 必须严格对应上方测试点的 id，不得捏造。
+        6. 每条 cases 记录都需要包含 id、title、function_module、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
         """
     ).strip()
 
@@ -165,7 +175,10 @@ def build_integration_system_prompt() -> str:
 
 
 def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
-    tp_titles = [tp.title for tp in payload.reviewed_test_points]
+    tp_details = "\n".join(
+        f"- [{tp.id}][{tp.category}][风险:{tp.risk_level.value}] {tp.title}：{tp.description}"
+        for tp in payload.reviewed_test_points
+    )
     return dedent(
         f"""
         当前任务：基于已有的业务流和测试点，生成跨模块流程联动测试场景。
@@ -181,8 +194,8 @@ def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
         端到端业务流（flows）：
         {payload.flows}
 
-        已审核测试点：
-        {tp_titles}
+        已审核测试点（包含完整细节）：
+        {tp_details}
 
         输出要求：
         1. 生成跨模块的端到端测试场景（integration_tests）。

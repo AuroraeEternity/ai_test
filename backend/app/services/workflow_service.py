@@ -99,8 +99,8 @@ class WorkflowService:
         system_prompt = build_case_system_prompt()
         user_prompt = build_case_user_prompt(payload)
         llm_output = await self._generate_cases_with_llm(system_prompt, user_prompt)
-        cases = self._normalize_cases(payload, llm_output.cases)
-        validation_issues = llm_output.validation_issues
+        cases, normalize_issues = self._normalize_cases(payload, llm_output.cases)
+        validation_issues = llm_output.validation_issues + normalize_issues
         validation_issues = validation_issues + self._validate_cases(cases, payload.selected_test_points, payload.platform)
 
         return GenerateCasesResponse(
@@ -272,8 +272,9 @@ class WorkflowService:
         self,
         payload: GenerateCasesRequest,
         cases: list[TestCase],
-    ) -> list[TestCase]:
+    ) -> tuple[list[TestCase], list[ValidationIssue]]:
         normalized_cases: list[TestCase] = []
+        extra_issues: list[ValidationIssue] = []
         fallback_map = {item.id: item for item in payload.selected_test_points}
 
         for index, case in enumerate(cases, start=1):
@@ -283,10 +284,16 @@ class WorkflowService:
             if not case.case_type:
                 case.case_type = "functional"
             if case.source_test_point_id not in fallback_map and payload.selected_test_points:
-                case.source_test_point_id = payload.selected_test_points[min(index - 1, len(payload.selected_test_points) - 1)].id
+                extra_issues.append(
+                    ValidationIssue(
+                        issue_type="traceability",
+                        message=f"{case.id} 的 source_test_point_id '{case.source_test_point_id}' 无法匹配已选测试点，请人工确认关联关系。",
+                        severity=RiskLevel.HIGH,
+                    )
+                )
             normalized_cases.append(case)
 
-        return normalized_cases
+        return normalized_cases, extra_issues
 
     def _normalize_reviewed_test_points(self, test_points: list[TestPoint]) -> list[TestPoint]:
         normalized_test_points: list[TestPoint] = []
@@ -346,14 +353,6 @@ class WorkflowService:
                     ValidationIssue(
                         issue_type="traceability",
                         message=f"{case.id} 缺少 requirement_refs，无法回溯到需求或测试点。",
-                        severity=RiskLevel.MEDIUM,
-                    )
-                )
-            if platform.value not in case.coverage_tags:
-                issues.append(
-                    ValidationIssue(
-                        issue_type="platform",
-                        message=f"{case.id} 缺少平台标签 {platform.value}。",
                         severity=RiskLevel.MEDIUM,
                     )
                 )

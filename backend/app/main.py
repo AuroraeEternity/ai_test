@@ -4,8 +4,6 @@ import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-logger = logging.getLogger(__name__)
-
 from .config import get_settings
 from .models import (
     AnalyzeRequest,
@@ -23,6 +21,8 @@ from .models import (
 )
 from .services.history_service import HistoryService
 from .services.workflow_service import WorkflowService
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -48,12 +48,18 @@ async def get_meta() -> MetaResponse:
     return workflow_service.get_meta()
 
 
+def _err_detail(label: str, exc: Exception) -> str:
+    msg = str(exc) or f"{type(exc).__name__}: 请查看后端日志"
+    return f"{label}：{msg}"
+
+
 @app.post("/api/workflow/analyze", response_model=AnalyzeResponse)
 async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     try:
         return await workflow_service.analyze(payload)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"需求解析失败：{exc}") from exc
+        logger.error("analyze 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("需求解析失败", exc)) from exc
 
 
 @app.post("/api/workflow/generate-cases", response_model=GenerateCasesResponse)
@@ -62,8 +68,7 @@ async def generate_cases(payload: GenerateCasesRequest) -> GenerateCasesResponse
         return await workflow_service.generate_cases(payload)
     except Exception as exc:
         logger.error("generate-cases 失败:\n%s", traceback.format_exc())
-        detail = str(exc) or f"{type(exc).__name__}: 请查看后端日志"
-        raise HTTPException(status_code=502, detail=f"测试用例生成失败：{detail}") from exc
+        raise HTTPException(status_code=502, detail=_err_detail("测试用例生成失败", exc)) from exc
 
 
 @app.post("/api/workflow/review-test-points", response_model=ReviewTestPointsResponse)
@@ -71,7 +76,8 @@ async def review_test_points(payload: ReviewTestPointsRequest) -> ReviewTestPoin
     try:
         return await workflow_service.review_test_points(payload)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"测试点审核失败：{exc}") from exc
+        logger.error("review-test-points 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("测试点审核失败", exc)) from exc
 
 
 @app.post("/api/workflow/integration-tests", response_model=IntegrationTestsResponse)
@@ -79,7 +85,8 @@ async def integration_tests(payload: IntegrationTestsRequest) -> IntegrationTest
     try:
         return await workflow_service.generate_integration_tests(payload)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"流程联动测试生成失败：{exc}") from exc
+        logger.error("integration-tests 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("流程联动测试生成失败", exc)) from exc
 
 
 @app.post("/api/workflow/mindmap", response_model=MindMapResponse)
@@ -87,7 +94,8 @@ async def generate_mindmap(payload: MindMapRequest) -> MindMapResponse:
     try:
         return await workflow_service.generate_mindmap(payload)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"思维导图生成失败：{exc}") from exc
+        logger.error("mindmap 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("思维导图生成失败", exc)) from exc
 
 
 @app.get("/api/history", response_model=list[HistoryRecord])

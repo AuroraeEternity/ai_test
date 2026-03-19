@@ -154,6 +154,7 @@ class GenerateCasesRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
     functions: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
     selected_test_points: list[TestPoint] = Field(default_factory=list)
 
 

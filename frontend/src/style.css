@@ -979,6 +979,32 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   background: #FAFAFA;
   flex-wrap: wrap;
 }
+.case-issues {
+  padding: 8px 16px 12px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.case-issue-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: default;
+}
+.case-issue-tag.issue-high {
+  background: #FEF2F2;
+  color: #DC2626;
+  border: 1px solid #FECACA;
+}
+.case-issue-tag.issue-medium {
+  background: #FFFBEB;
+  color: #D97706;
+  border: 1px solid #FDE68A;
+}
 
 /* Integration Tests */
 .integration-loading-banner {

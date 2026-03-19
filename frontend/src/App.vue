@@ -232,6 +232,18 @@ const selectedTestPoints = computed(() =>
   displayedTestPoints.value.filter((item) => selectedTestPointIds.value.includes(item.id)),
 )
 
+const issuesByCase = computed(() => {
+  const map: Record<string, ValidationIssue[]> = {}
+  if (!generation.value) return map
+  for (const issue of generation.value.validation_issues) {
+    const match = issue.message.match(/^(TC[-\d]+\w*)/)
+    const caseId = match ? match[1] : '__global__'
+    if (!map[caseId]) map[caseId] = []
+    map[caseId].push(issue)
+  }
+  return map
+})
+
 const clarificationAnswerList = computed<ClarificationAnswer[]>(() => {
   if (!analysis.value) return []
   return analysis.value.clarification_questions
@@ -353,6 +365,7 @@ const generateAllCases = async () => {
         platform: form.platform,
         summary: analysis.value.summary,
         functions: analysis.value.functions,
+        module_segments: analysis.value.module_segments,
         selected_test_points: selectedTestPoints.value,
       }),
     })
@@ -963,6 +976,18 @@ onMounted(() => { loadMeta(); loadHistory() })
                     <span class="tag-outline" v-for="tag in c.coverage_tags" :key="tag">{{ tag }}</span>
                     <span class="tag-outline" style="border-color: var(--primary-color); color: var(--primary-color);">来自: {{ c.source_test_point_id }}</span>
                   </div>
+                  <div v-if="issuesByCase[c.id]?.length" class="case-issues">
+                    <span
+                      v-for="(issue, idx) in issuesByCase[c.id]"
+                      :key="idx"
+                      class="case-issue-tag"
+                      :class="issue.severity === 'high' ? 'issue-high' : 'issue-medium'"
+                      :title="issue.message"
+                    >
+                      <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                      {{ issue.issue_type }}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1017,21 +1042,6 @@ onMounted(() => { loadMeta(); loadHistory() })
 
                 <div v-else-if="!generatingIntegration && analysis && analysis.flows.length === 0" class="integration-loading-banner" style="color: var(--text-muted);">
                   未识别到端到端业务流，无流程联动测试
-                </div>
-              </div>
-
-              <!-- Validation Issues -->
-              <div v-if="generation.validation_issues.length > 0" style="margin-top: 32px;">
-                <div class="summary-section-title" style="color: var(--danger-color);">
-                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                  校验问题
-                  <span class="badge badge-danger">{{ generation.validation_issues.length }}</span>
-                </div>
-                <div class="issue-list">
-                  <div class="issue-card" v-for="issue in generation.validation_issues" :key="issue.message">
-                    <div class="cq-title">类型: {{ issue.issue_type }}</div>
-                    <div style="margin-top: 8px; font-size: 14px;">{{ issue.message }}</div>
-                  </div>
                 </div>
               </div>
 
