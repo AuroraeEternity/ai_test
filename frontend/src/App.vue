@@ -194,6 +194,8 @@ const errorMessage = ref('')
 const clarifyRound = ref(0)
 const accumulatedAnswers = ref<ClarificationAnswer[]>([])
 const MAX_CLARIFY_ROUNDS = 3
+const uploadingPdf = ref(false)
+const pdfFileName = ref('')
 
 const form = reactive({
   platform: 'web' as Platform,
@@ -330,6 +332,50 @@ const loadMeta = async () => {
     meta.value = fallbackMeta
   } finally {
     loadingMeta.value = false
+  }
+}
+
+const MAX_PDF_SIZE_MB = 20
+const handlePdfUpload = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    errorMessage.value = '仅支持 PDF 文件'
+    return
+  }
+  const sizeMB = file.size / 1024 / 1024
+  if (sizeMB > MAX_PDF_SIZE_MB) {
+    errorMessage.value = `文件过大（${sizeMB.toFixed(1)} MB），最大支持 ${MAX_PDF_SIZE_MB} MB`
+    return
+  }
+  errorMessage.value = ''
+  uploadingPdf.value = true
+  pdfFileName.value = file.name
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 200000)
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await fetch(`${apiBaseUrl}/api/upload-pdf`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    })
+    clearTimeout(timer)
+    if (!response.ok) throw new Error(await extractErrorMessage(response, 'PDF 解析失败'))
+    const data = await response.json()
+    form.requirementText = data.text
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      errorMessage.value = 'PDF 解析超时，请尝试减少页数后重试'
+    } else {
+      errorMessage.value = error instanceof Error ? error.message : 'PDF 解析失败'
+    }
+    pdfFileName.value = ''
+  } finally {
+    uploadingPdf.value = false
+    input.value = ''
   }
 }
 
@@ -851,15 +897,27 @@ onMounted(() => { loadMeta(); loadHistory() })
               </div>
 
               <div class="form-group">
-                <label class="form-label">
-                  需求描述
-                  <span class="badge badge-gray">必填</span>
-                </label>
+                <div class="form-label-row">
+                  <label class="form-label" style="margin-bottom:0;">
+                    需求描述
+                    <span class="badge badge-gray">必填</span>
+                  </label>
+                  <label class="pdf-upload-btn" :class="{ uploading: uploadingPdf }">
+                    <input type="file" accept=".pdf" hidden @change="handlePdfUpload" :disabled="uploadingPdf" />
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    {{ uploadingPdf ? '解析中...' : '上传 PDF' }}
+                  </label>
+                </div>
+                <div v-if="pdfFileName && !uploadingPdf" class="pdf-file-tag">
+                  <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                  {{ pdfFileName }}
+                  <button class="pdf-file-remove" @click="pdfFileName = ''" title="清除">&times;</button>
+                </div>
                 <textarea
                   v-model="form.requirementText"
                   class="form-control"
                   rows="6"
-                  placeholder="在此粘贴需求文档、用户故事或 PRD 内容..."
+                  placeholder="在此粘贴需求文档、用户故事或 PRD 内容，或上传 PDF 自动提取..."
                 />
               </div>
 

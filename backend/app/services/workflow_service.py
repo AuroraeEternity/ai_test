@@ -69,6 +69,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=ClarifyLLMOutput.model_json_schema(),
+            temperature=0.1,
         )
         result = ClarifyLLMOutput.model_validate(raw_result)
         has_blocking = any(q.blocking for q in result.clarification_questions)
@@ -95,6 +96,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=GenerateTestPointsLLMOutput.model_json_schema(),
+            temperature=0.4,
         )
         result = GenerateTestPointsLLMOutput.model_validate(raw_result)
         if not result.test_points:
@@ -258,6 +260,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=AnalyzeLLMOutput.model_json_schema(),
+            temperature=0.4,
         )
         result = AnalyzeLLMOutput.model_validate(raw_result)
         if not result.coverage_dimensions:
@@ -275,6 +278,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=ReviewTestPointsLLMOutput.model_json_schema(),
+            temperature=0.1,
         )
         result = ReviewTestPointsLLMOutput.model_validate(raw_result)
         if not result.reviewed_test_points:
@@ -290,6 +294,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=GenerateCasesLLMOutput.model_json_schema(),
+            temperature=0.2,
         )
         result = GenerateCasesLLMOutput.model_validate(raw_result)
         if not result.cases:
@@ -305,6 +310,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=IntegrationTestsLLMOutput.model_json_schema(),
+            temperature=0.4,
         )
         result = IntegrationTestsLLMOutput.model_validate(raw_result)
         if not result.integration_tests:
@@ -320,6 +326,7 @@ class WorkflowService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             json_schema=MindMapLLMOutput.model_json_schema(),
+            temperature=0.1,
         )
         result = MindMapLLMOutput.model_validate(raw_result)
         if not result.root.children:

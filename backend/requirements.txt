@@ -2,4 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic
 pydantic-settings
-httpx
+python-multipart
+google-genai
+pymupdf

@@ -7,7 +7,7 @@ from .models import AnalyzeRequest, ClarifyRequest, GenerateCasesRequest, Genera
 
 def build_clarify_system_prompt() -> str:
     """
-    
+
     """
     return dedent(
         """

@@ -15,11 +15,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5175",
     ]
 
-    llm_provider: str = "gemini"
-    llm_api_key: str = ""  # 从 backend/.env 的 LLM_API_KEY 加载
-    llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    llm_api_key: str = ""
     llm_model: str = "gemini-2.5-flash"
-    llm_timeout_seconds: int = 60
     llm_temperature: float = 0.2
 
     model_config = SettingsConfigDict(
