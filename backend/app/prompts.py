@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from .models import AnalyzeRequest, ClarifyRequest, GenerateCasesRequest, GenerateTestPointsRequest, IntegrationTestsRequest, MindMapRequest, ReviewTestPointsRequest
+from .models import ClarifyRequest, GenerateCasesRequest, GenerateTestPointsRequest, IntegrationTestsRequest, MindMapRequest, ReviewTestPointsRequest
 
 
 # ── 澄清阶段 ──────────────────────────────────────────────────────────────────
@@ -89,9 +89,12 @@ def build_clarify_user_prompt(payload: ClarifyRequest) -> str:
 
 # ── 测试点生成阶段 ────────────────────────────────────────────────────────────
 
+CATEGORY_VALUES = "正向流程 / 边界值 / 异常处理 / 权限控制 / 状态流转 / 数据校验 / 平台特性"
+
+
 def build_generate_test_points_system_prompt() -> str:
     return dedent(
-        """
+        f"""
         你是一名高级测试分析专家，负责在需求完全确认后生成全面的测试点。
         输出时必须遵守以下原则：
         1. 基于已确认的需求和所有澄清信息，提取功能模块、业务流和测试点。
@@ -99,7 +102,9 @@ def build_generate_test_points_system_prompt() -> str:
         3. platform_specific=true 的条件：该测试点仅在当前平台（web/app/plugin）下存在，换平台后不适用。
         4. 先提取 functions / flows / module_segments，再从覆盖维度生成 test_points。
         5. 测试点总数建议 15-30 个，高风险（risk_level=high）场景至少占 40%。
-        6. 你必须严格输出 JSON，不要输出解释性文字。
+        6. category 只能取以下值之一：{CATEGORY_VALUES}
+        7. id 格式必须为 TP-001、TP-002 …（三位数字编号）。
+        8. 你必须严格输出 JSON，不要输出解释性文字。
         """
     ).strip()
 
@@ -133,62 +138,7 @@ def build_generate_test_points_user_prompt(payload: GenerateTestPointsRequest) -
         4. 列出本次覆盖的测试维度（coverage_dimensions），从以下维度中选取实际覆盖的项：
            正向流程 / 必填非必填 / 等价类 / 边界值 / 非法输入 / 状态流转 / 权限控制 / 异常处理 / 平台特性
         5. 基于以上覆盖维度生成测试点（test_points），总数 15-30 个，高风险场景至少 40%。
-           每个 test_point 包含：id、title、category、description、source、risk_level、platform_specific。
-        """
-    ).strip()
-
-
-def build_analysis_system_prompt() -> str:
-    return dedent(
-        """
-        你是一名高级测试分析专家，负责将原始需求整理成结构化测试输入。
-        输出时必须遵守以下原则：
-        1. 先理解业务目标，再拆分主流程、异常流程和业务规则。
-        2. 从需求中提取独立的功能模块列表（functions）和端到端业务流（flows）。
-        3. 按功能模块拆分需求片段（module_segments），每个模块对应一段精简的需求描述。
-        4. 根据平台类型补充平台特有测试关注点。
-        5. 识别需求歧义、缺失边界、缺失状态流转和缺失预期结果。
-        6. 先产出测试点，不直接自由发挥生成冗余用例。
-        7. 所有测试点都要能回溯到需求或平台特性。
-        8. 你必须严格输出 JSON，不要输出解释性文字。
-        """
-    ).strip()
-
-
-def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
-    clarification_answers = payload.clarification_answers or ["未提供"]
-    project_line = f"所属项目：{payload.project}" if payload.project else "所属项目：未指定"
-    return dedent(
-        f"""
-        当前任务：为功能测试用例生成链路做需求解析。
-
-        平台类型：{payload.platform.value}
-        {project_line}
-        需求描述：
-        {payload.requirement_text}
-
-        补充角色：{payload.actors or ['未提供']}
-        补充前置条件：{payload.preconditions or ['未提供']}
-        补充业务规则：{payload.business_rules or ['未提供']}
-        已补充的澄清回答：{clarification_answers}
-
-        请重点完成：
-        1. 提炼结构化摘要（summary）。
-        2. 从需求中提取功能模块列表（functions），如 ["登录", "会话建立", "首页跳转"]。
-        3. 从需求中提取端到端业务流（flows），如 ["输入账号->输入密码->点击登录->校验凭证->跳转首页"]。
-        4. 按功能模块拆分需求片段（module_segments），格式为 {{"模块名": "该模块对应的需求片段描述"}}。
-        5. 给出待确认问题清单（clarification_questions）。
-        6. 基于以下覆盖维度提取测试点（test_points）：
-           - 正向流程
-           - 必填/非必填
-           - 等价类
-           - 边界值
-           - 非法输入
-           - 状态流转
-           - 权限控制
-           - 异常处理
-           - 平台特性
-        7. test_points 中每一项都需要包含 id、title、category、description、source、risk_level、platform_specific。
+           每个 test_point 包含：id（格式 TP-001）、title、category（只能取：{CATEGORY_VALUES}）、description、source、risk_level、platform_specific。
         """
     ).strip()
 
@@ -197,7 +147,7 @@ def build_analysis_user_prompt(payload: AnalyzeRequest) -> str:
 
 def build_review_system_prompt() -> str:
     return dedent(
-        """
+        f"""
         你是一名高级测试设计审核专家，负责审核已经生成的测试点。
         输出时必须遵守以下原则：
         1. 删除以下类型的测试点：
@@ -213,8 +163,13 @@ def build_review_system_prompt() -> str:
            - REMOVED：移除了测试点
            - MODIFIED：修改了测试点描述或属性
            - WARNING：发现潜在覆盖遗漏，但未做调整
-        4. reviewed_test_points 必须保留适合继续生成测试用例的最终测试点清单。
-        5. 你必须严格输出 JSON，不要输出解释性文字。
+        4. ID 规则：
+           - 保留的测试点必须沿用原 ID（如 TP-001）
+           - 新增的测试点 ID 从已有最大编号之后递增（如已有 TP-020，新增用 TP-021）
+           - target_test_point_id 必须指向 reviewed_test_points 中实际存在的 ID
+        5. category 只能取以下值之一：{CATEGORY_VALUES}
+        6. reviewed_test_points 必须保留适合继续生成测试用例的最终测试点清单。
+        7. 你必须严格输出 JSON，不要输出解释性文字。
         """
     ).strip()
 
@@ -247,9 +202,8 @@ def build_review_user_prompt(payload: ReviewTestPointsRequest) -> str:
         {test_points_text}
 
         输出要求：
-        1. reviewed_test_points 中每一项包含：id、title、category、description、source、risk_level、platform_specific。
-        2. review_notes 中每一项包含：note_type（只能取 ADDED/REMOVED/MODIFIED/WARNING）、message、severity、target_test_point_id。
-        3. reviewed_test_points 优先覆盖高风险主流程、异常流程、状态流转、权限和平台专项场景。
+        1. reviewed_test_points 优先覆盖高风险主流程、异常流程、状态流转、权限和平台专项场景。
+        2. 其余字段约束已在系统指令中定义，严格遵守即可。
         """
     ).strip()
 
@@ -261,18 +215,19 @@ def build_case_system_prompt() -> str:
         """
         你是一名高级测试设计专家，负责根据已确认的测试点生成结构化功能测试用例。
         输出时必须遵守以下原则：
-        1. 每条用例必须对应一个已确认测试点，source_test_point_id 严格取自测试点 id，不得捏造。
-        2. 每条用例必须标注 function_module，取值必须来自分析阶段提取的 functions 列表。
-        3. 用例结构必须包含前置条件、测试数据、步骤和预期结果，缺一不可。
-        4. case_type 只能取以下值：functional / boundary / exception / permission / platform
-        5. confidence 评分标准：
+        1. 每条用例必须对应一个已确认测试点，source_test_point_id 严格取自测试点 id（如 TP-001），不得捏造。
+        2. 用例 id 格式为 TC-001、TC-002 …（三位数字编号）。
+        3. 每条用例必须标注 function_module，取值必须来自分析阶段提取的 functions 列表。
+        4. 用例结构必须包含前置条件、测试数据、步骤和预期结果，缺一不可。
+        5. case_type 只能取以下值：functional / boundary / exception / permission / platform
+        6. confidence 评分标准：
            - 0.9-1.0：需求描述完整，用例逻辑无歧义
            - 0.7-0.9：需求有部分假设，用例逻辑基本清晰
            - 0.5-0.7：需求存在歧义，用例基于推断生成
-        6. requirement_refs：填写该用例对应的需求来源描述，取自 summary 的 main_flow 或 business_rules 中的相关项。
-        7. 用例需体现平台特性，不生成与平台无关的场景。
-        8. 避免重复、避免需求中不存在的假设、避免不可执行的表述。
-        9. 你必须严格输出 JSON，不要输出解释性文字。
+        7. requirement_refs：填写该用例对应的需求来源描述，取自 summary 的 main_flow 或 business_rules 中的相关项。
+        8. 用例需体现平台特性，不生成与平台无关的场景。
+        9. 避免重复、避免需求中不存在的假设、避免不可执行的表述。
+        10. 你必须严格输出 JSON，不要输出解释性文字。
         """
     ).strip()
 
@@ -312,11 +267,8 @@ def build_case_user_prompt(payload: GenerateCasesRequest) -> str:
         输出要求：
         1. 优先覆盖高风险（risk_level=high）测试点。
         2. function_module 取值必须来自上方功能模块列表。
-        3. case_type 只能取：functional / boundary / exception / permission / platform。
-        4. 每条用例包含 coverage_tags，并体现平台特性。
-        5. source_test_point_id 必须严格对应上方测试点的 id，不得捏造。
-        6. requirement_refs 填写该用例对应的需求来源，取自 summary 的 main_flow 或 business_rules。
-        7. 每条 cases 记录包含：id、title、function_module、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
+        3. source_test_point_id 必须严格对应上方测试点的 id（如 TP-001），不得捏造。
+        4. 每条 cases 记录包含：id（格式 TC-001）、title、function_module、case_type、priority、requirement_refs、preconditions、test_data、steps、expected_results、coverage_tags、platform、source_test_point_id、confidence。
         """
     ).strip()
 
@@ -331,8 +283,9 @@ def build_integration_system_prompt() -> str:
         1. 重点关注端到端业务流，而不是单一功能模块的测试。
         2. 覆盖正常流程联动、异常中断后恢复、跨模块状态传递等场景。
         3. 每个联动测试场景需要包含完整的前置条件、执行步骤和预期结果。
-        4. 联动测试场景不能和模块级功能测试重复，要聚焦集成和交互。
-        5. 你必须严格输出 JSON，不要输出解释性文字。
+        4. 联动测试场景不能和已有功能测试用例重复，要聚焦集成和交互。
+        5. id 格式为 IT-001、IT-002 …（三位数字编号）。
+        6. 你必须严格输出 JSON，不要输出解释性文字。
         """
     ).strip()
 
@@ -342,6 +295,10 @@ def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
         f"- [{tp.id}][{tp.category}][风险:{tp.risk_level.value}] {tp.title}：{tp.description}"
         for tp in payload.reviewed_test_points
     )
+    existing_cases_section = ""
+    if payload.functional_case_titles:
+        cases_text = "\n".join(f"  - {t}" for t in payload.functional_case_titles)
+        existing_cases_section = f"\n已生成的功能测试用例（禁止与以下用例场景重复）：\n{cases_text}\n"
     return dedent(
         f"""
         当前任务：基于已有的业务流和测试点，生成跨模块流程联动测试场景。
@@ -359,10 +316,10 @@ def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
 
         已审核测试点（共 {len(payload.reviewed_test_points)} 个）：
         {tp_details}
-
+        {existing_cases_section}
         输出要求：
         1. 生成跨模块的端到端测试场景（integration_tests）。
-        2. 每个场景包含 id、title、description、flow（对应的业务流）、preconditions、steps、expected_results。
+        2. 每个场景包含 id（格式 IT-001）、title、description、flow（对应的业务流）、preconditions、steps、expected_results。
         3. 重点覆盖：
            - 多模块串联的正常流程
            - 中间环节异常后的恢复和回退

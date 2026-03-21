@@ -4,9 +4,6 @@ from collections import Counter
 
 from ..config import get_settings
 from ..models import (
-    AnalyzeLLMOutput,
-    AnalyzeRequest,
-    AnalyzeResponse,
     ClarifyLLMOutput,
     ClarifyRequest,
     ClarifyResponse,
@@ -29,15 +26,12 @@ from ..models import (
     ReviewTestPointsLLMOutput,
     ReviewTestPointsRequest,
     ReviewTestPointsResponse,
-    ReviewNote,
     RiskLevel,
     TestPoint,
     TestCase,
     ValidationIssue,
 )
 from ..prompts import (
-    build_analysis_system_prompt,
-    build_analysis_user_prompt,
     build_case_system_prompt,
     build_case_user_prompt,
     build_clarify_system_prompt,
@@ -115,30 +109,7 @@ class WorkflowService:
         )
 
     # ------------------------------------------------------------------ #
-    # Stage 2-4: 结构分析 + 缺失检查 + 模块拆分（保留旧接口）
-    async def analyze(self, payload: AnalyzeRequest) -> AnalyzeResponse:
-        system_prompt = build_analysis_system_prompt()
-        user_prompt = build_analysis_user_prompt(payload)
-        llm_output = await self._analyze_with_llm(system_prompt, user_prompt)
-
-        return AnalyzeResponse(
-            platform=payload.platform,
-            summary=llm_output.summary,
-            functions=llm_output.functions,
-            flows=llm_output.flows,
-            module_segments=llm_output.module_segments,
-            clarification_questions=llm_output.clarification_questions,
-            coverage_dimensions=llm_output.coverage_dimensions,
-            test_points=llm_output.test_points,
-            prompts={
-                "analysis_system_prompt": system_prompt,
-                "analysis_user_prompt": user_prompt,
-                "execution_mode": "llm",
-            },
-        )
-
-    # ------------------------------------------------------------------ #
-    # Stage 4: 测试点审核
+    # Stage 2: 测试点审核
     # ------------------------------------------------------------------ #
     async def review_test_points(self, payload: ReviewTestPointsRequest) -> ReviewTestPointsResponse:
         system_prompt = build_review_system_prompt()
@@ -164,8 +135,7 @@ class WorkflowService:
         user_prompt = build_case_user_prompt(payload)
         llm_output = await self._generate_cases_with_llm(system_prompt, user_prompt)
         cases, normalize_issues = self._normalize_cases(payload, llm_output.cases)
-        validation_issues = llm_output.validation_issues + normalize_issues
-        validation_issues = validation_issues + self._validate_cases(cases, payload.selected_test_points, payload.platform)
+        validation_issues = normalize_issues + self._validate_cases(cases, payload.selected_test_points, payload.platform)
 
         return GenerateCasesResponse(
             platform=payload.platform,
@@ -254,20 +224,6 @@ class WorkflowService:
     # ================================================================== #
     # Internal LLM wrappers
     # ================================================================== #
-
-    async def _analyze_with_llm(self, system_prompt: str, user_prompt: str) -> AnalyzeLLMOutput:
-        raw_result = await self.llm_service.generate_json(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            json_schema=AnalyzeLLMOutput.model_json_schema(),
-            temperature=0.4,
-        )
-        result = AnalyzeLLMOutput.model_validate(raw_result)
-        if not result.coverage_dimensions:
-            raise ValueError("LLM 未返回 coverage_dimensions。")
-        if not result.test_points:
-            raise ValueError("LLM 未返回 test_points。")
-        return result
 
     async def _review_test_points_with_llm(
         self,

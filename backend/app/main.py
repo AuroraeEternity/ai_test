@@ -7,8 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .models import (
-    AnalyzeRequest,
-    AnalyzeResponse,
     ClarifyRequest,
     ClarifyResponse,
     GenerateCasesRequest,
@@ -107,15 +105,6 @@ async def generate_test_points(payload: GenerateTestPointsRequest) -> GenerateTe
     except Exception as exc:
         logger.error("generate-test-points 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("测试点生成失败", exc)) from exc
-
-
-@app.post("/api/workflow/analyze", response_model=AnalyzeResponse)
-async def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
-    try:
-        return await workflow_service.analyze(payload)
-    except Exception as exc:
-        logger.error("analyze 失败:\n%s", traceback.format_exc())
-        raise HTTPException(status_code=502, detail=_err_detail("需求解析失败", exc)) from exc
 
 
 @app.post("/api/workflow/generate-cases", response_model=GenerateCasesResponse)

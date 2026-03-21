@@ -21,6 +21,16 @@ class RiskLevel(str, Enum):
     LOW = "low"
 
 
+class TestCategory(str, Enum):
+    POSITIVE = "正向流程"
+    BOUNDARY = "边界值"
+    EXCEPTION = "异常处理"
+    PERMISSION = "权限控制"
+    STATE = "状态流转"
+    DATA_VALIDATION = "数据校验"
+    PLATFORM = "平台特性"
+
+
 class ClarificationQuestion(BaseModel):
     id: str
     question: str
@@ -49,7 +59,7 @@ class StructuredSummary(BaseModel):
 class TestPoint(BaseModel):
     id: str
     title: str
-    category: str
+    category: TestCategory = TestCategory.POSITIVE
     description: str
     source: str
     risk_level: RiskLevel = RiskLevel.MEDIUM
@@ -151,38 +161,6 @@ class GenerateTestPointsLLMOutput(BaseModel):
     test_points: list[TestPoint] = Field(default_factory=list)
 
 
-class AnalyzeRequest(BaseModel):
-    platform: PlatformType
-    project: str = ""
-    requirement_text: str = Field(min_length=10)
-    business_rules: list[str] = Field(default_factory=list)
-    actors: list[str] = Field(default_factory=list)
-    preconditions: list[str] = Field(default_factory=list)
-    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
-
-
-class AnalyzeResponse(BaseModel):
-    platform: PlatformType
-    summary: StructuredSummary
-    functions: list[str] = Field(default_factory=list)
-    flows: list[str] = Field(default_factory=list)
-    module_segments: dict[str, str] = Field(default_factory=dict)
-    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
-    coverage_dimensions: list[str] = Field(default_factory=list)
-    test_points: list[TestPoint] = Field(default_factory=list)
-    prompts: dict[str, str] = Field(default_factory=dict)
-
-
-class AnalyzeLLMOutput(BaseModel):
-    summary: StructuredSummary
-    functions: list[str] = Field(default_factory=list)
-    flows: list[str] = Field(default_factory=list)
-    module_segments: dict[str, str] = Field(default_factory=dict)
-    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
-    coverage_dimensions: list[str] = Field(default_factory=list)
-    test_points: list[TestPoint] = Field(default_factory=list)
-
-
 class ReviewTestPointsRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
@@ -219,7 +197,6 @@ class GenerateCasesResponse(BaseModel):
 
 class GenerateCasesLLMOutput(BaseModel):
     cases: list[TestCase] = Field(default_factory=list)
-    validation_issues: list[ValidationIssue] = Field(default_factory=list)
 
 
 # 流程联动测试请求/响应
@@ -228,6 +205,7 @@ class IntegrationTestsRequest(BaseModel):
     summary: StructuredSummary
     flows: list[str] = Field(default_factory=list)
     reviewed_test_points: list[TestPoint] = Field(default_factory=list)
+    functional_case_titles: list[str] = Field(default_factory=list)
 
 
 class IntegrationTestsResponse(BaseModel):
