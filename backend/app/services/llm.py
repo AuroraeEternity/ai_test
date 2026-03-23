@@ -45,16 +45,33 @@ class LLMService:
         temperature: float | None = None,
     ) -> dict[str, Any]:
         """调用 Gemini 生成结构化 JSON 输出。"""
+        actual_temperature = temperature if temperature is not None else self.settings.llm_temperature
+        logger.info("LLM 请求开始 | model=%s temperature=%s", self.model, actual_temperature)
+        logger.debug("system_prompt=%s", system_prompt)
+        logger.debug("user_prompt=%s", user_prompt)
+
         response = await self.client.aio.models.generate_content(
             model=self.model,
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                temperature=temperature if temperature is not None else self.settings.llm_temperature,
+                temperature=actual_temperature,
                 response_mime_type="application/json",
                 response_json_schema=json_schema,
             ),
         )
+
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            logger.info(
+                "LLM 请求完成 | input_tokens=%s output_tokens=%s total_tokens=%s",
+                getattr(usage, "prompt_token_count", "?"),
+                getattr(usage, "candidates_token_count", "?"),
+                getattr(usage, "total_token_count", "?"),
+            )
+        else:
+            logger.info("LLM 请求完成")
+
         return self._parse_json_response(response)
 
     # ------------------------------------------------------------------ #
@@ -65,14 +82,18 @@ class LLMService:
         text = (response.text or "").strip()
 
         if not text:
+            logger.error("Gemini 返回内容为空")
             raise ValueError("Gemini 返回内容为空")
 
         if text.startswith("```"):
             text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
         try:
-            return json.loads(text)
+            result = json.loads(text)
+            logger.debug("JSON 解析成功 | keys=%s", list(result.keys()) if isinstance(result, dict) else type(result).__name__)
+            return result
         except json.JSONDecodeError as e:
+            logger.error("JSON 解析失败 | error=%s | 原文前 200 字=%s", e, text[:200])
             raise ValueError(
                 f"Gemini 返回 JSON 解析失败: {e}; 原文前 200 字: {text[:200]}"
             ) from e

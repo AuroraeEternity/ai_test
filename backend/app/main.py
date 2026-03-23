@@ -23,7 +23,7 @@ from .models import (
     ReviewTestPointsResponse,
 )
 from .services.history_service import HistoryService
-from .services.workflow_service import WorkflowService
+from .services.workflow_service import WorkflowService, WorkflowValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,8 @@ async def upload_pdf(file: UploadFile = File(...)) -> dict:
 async def clarify(payload: ClarifyRequest) -> ClarifyResponse:
     try:
         return await workflow_service.clarify(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("需求澄清失败", exc)) from exc
     except Exception as exc:
         logger.error("clarify 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("需求澄清失败", exc)) from exc
@@ -102,6 +104,8 @@ async def clarify(payload: ClarifyRequest) -> ClarifyResponse:
 async def generate_test_points(payload: GenerateTestPointsRequest) -> GenerateTestPointsResponse:
     try:
         return await workflow_service.generate_test_points(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("测试点生成失败", exc)) from exc
     except Exception as exc:
         logger.error("generate-test-points 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("测试点生成失败", exc)) from exc
@@ -111,6 +115,8 @@ async def generate_test_points(payload: GenerateTestPointsRequest) -> GenerateTe
 async def generate_cases(payload: GenerateCasesRequest) -> GenerateCasesResponse:
     try:
         return await workflow_service.generate_cases(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("测试用例生成失败", exc)) from exc
     except Exception as exc:
         logger.error("generate-cases 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("测试用例生成失败", exc)) from exc
@@ -120,6 +126,8 @@ async def generate_cases(payload: GenerateCasesRequest) -> GenerateCasesResponse
 async def review_test_points(payload: ReviewTestPointsRequest) -> ReviewTestPointsResponse:
     try:
         return await workflow_service.review_test_points(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("测试点审核失败", exc)) from exc
     except Exception as exc:
         logger.error("review-test-points 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("测试点审核失败", exc)) from exc
@@ -129,6 +137,8 @@ async def review_test_points(payload: ReviewTestPointsRequest) -> ReviewTestPoin
 async def integration_tests(payload: IntegrationTestsRequest) -> IntegrationTestsResponse:
     try:
         return await workflow_service.generate_integration_tests(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("流程联动测试生成失败", exc)) from exc
     except Exception as exc:
         logger.error("integration-tests 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("流程联动测试生成失败", exc)) from exc
@@ -138,6 +148,8 @@ async def integration_tests(payload: IntegrationTestsRequest) -> IntegrationTest
 async def generate_mindmap(payload: MindMapRequest) -> MindMapResponse:
     try:
         return await workflow_service.generate_mindmap(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("思维导图生成失败", exc)) from exc
     except Exception as exc:
         logger.error("mindmap 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("思维导图生成失败", exc)) from exc

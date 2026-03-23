@@ -1,130 +1,73 @@
-# AI Test Platform
+# AI TEST
 
-一个面向测试工程师的 AI 测试平台 MVP。
+一个面向 AI 测试设计场景的前后端项目，当前聚焦于：
 
-当前版本先聚焦 `功能测试用例生成`，并支持根据平台类型 `Web / App` 输出针对性的测试点和测试用例。
+- 需求澄清
+- 摘要确认
+- 测试点生成与评审
+- 功能用例、联动测试、回归集生成
+- 思维导图生成
+- 历史任务资产沉淀
 
-## 当前流程
-产品流程按照你前面确认的链路落地：
+## 当前工作流
 
-1. 选择平台
-2. 输入需求
-3. AI 解析需求
-4. 确认歧义问题并补充答案
-5. 审核测试点
-6. 生成测试用例
+1. 需求输入
+2. AI 澄清
+3. 摘要确认
+4. 测试设计
+5. 用例与回归资产生成
 
-## 项目结构
+本轮已完成的关键整改：
+
+- `blocking` 澄清问题已在前后端都生效，未回答时不能进入测试点生成
+- 澄清输出新增 `missing_fields`、`resolved_fields`、`remaining_risks`
+- 用例生成改为按模块分批，再统一聚合与校验
+- `generate-cases` 统一返回 `cases + integration_tests + regression_suites + validation_issues`
+- 前端主流程已经组件化，不再依赖单个巨型 `App.vue` 页面承载全部逻辑
+- 历史记录统一为任务资产结构，并兼容旧版本快照
+
+## 目录结构
+
 ```text
-ai_test/
-├── backend/                  # FastAPI 后端
-│   ├── app/
-│   │   ├── config.py         # 配置项
-│   │   ├── main.py           # API 入口
-│   │   ├── models.py         # Pydantic 模型
-│   │   ├── prompts.py        # Prompt 模板
-│   │   └── services/
-│   │       ├── llm.py        # OpenAI 兼容 LLM 客户端
-│   │       └── workflow_service.py
-│   ├── requirements.txt
-│   └── .env.example
-├── frontend/                 # Vue 3 + Vite 前端
-│   └── src/
-│       ├── App.vue           # 单页工作台
-│       └── style.css         # 界面样式
-└── README.md
+backend/
+  app/
+    main.py
+    models.py
+    prompts.py
+    services/
+      workflow_service.py
+      history_service.py
+frontend/
+  src/
+    App.vue
+    components/
+    types/workflow.ts
 ```
 
-## 后端能力
-后端当前提供 4 个接口：
+## 后端接口
 
 - `GET /health`
 - `GET /api/meta`
-- `POST /api/workflow/analyze`
+- `POST /api/upload-pdf`
+- `POST /api/workflow/clarify`
+- `POST /api/workflow/generate-test-points`
 - `POST /api/workflow/review-test-points`
 - `POST /api/workflow/generate-cases`
+- `POST /api/workflow/integration-tests`
+- `POST /api/workflow/mindmap`
+- `GET /api/history`
+- `POST /api/history`
+- `GET /api/history/{record_id}`
+- `DELETE /api/history/{record_id}`
 
-当前版本必须接入 `OpenAI 兼容` 的真实大模型接口后才能运行工作流。
-如果模型配置缺失、调用失败或返回 JSON 不符合约束，接口会直接报错，不再做本地兜底生成。
+## 前端说明
 
-当前默认按 `Google AI Studio / Gemini API` 配置。
+前端当前采用组件化工作流：
 
-如果需要接入真实大模型，可以在 `backend/.env` 中配置：
+- `RequirementInputStep.vue`
+- `SummaryConfirmStep.vue`
+- `TestDesignStep.vue`
+- `CaseSuiteStep.vue`
+- `HistorySidebar.vue`
 
-- `LLM_PROVIDER`
-- `LLM_API_KEY`
-- `LLM_BASE_URL`
-- `LLM_MODEL`
-- `LLM_TIMEOUT_SECONDS`
-- `LLM_TEMPERATURE`
-
-示例：
-
-```bash
-LLM_PROVIDER=gemini
-LLM_API_KEY=your_api_key
-LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-LLM_MODEL=gemini-2.5-flash
-LLM_TIMEOUT_SECONDS=60
-LLM_TEMPERATURE=0.2
-```
-
-说明：
-
-- `LLM_API_KEY` 使用你在 Google AI Studio 申请的 Gemini API Key
-- `LLM_BASE_URL` 使用 Gemini OpenAI 兼容地址
-- 当前代码已针对 Gemini 的 JSON 返回做了兼容处理
-
-## 前端能力
-前端当前是一个工作台式单页界面，包含：
-
-- 平台选择
-- 需求输入
-- AI 解析结果展示
-- 澄清问题回答与重新解析
-- 测试点审核结果展示
-- 审核后测试点勾选
-- 测试用例结果展示
-
-## 本地启动
-### 1. 启动后端
-```bash
-cd backend
-python3 -m venv ../.venv
-../.venv/bin/pip install -r requirements.txt
-cp .env.example .env
-../.venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-启动前请先编辑 `backend/.env`，填入真实模型提供方、API Key、Base URL 和模型名称。
-
-### 2. 启动前端
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-默认前端访问后端地址：
-
-- `http://127.0.0.1:8000`
-
-如果你后续想改前端 API 地址，可以新增 `frontend/.env`：
-
-```bash
-VITE_API_BASE_URL=http://127.0.0.1:8000
-```
-
-## 已完成的 MVP 设计要点
-- 先做结构化需求解析，再生成测试用例
-- 先输出待确认问题，再把澄清答案回流进解析阶段
-- 先审核测试点，再基于审核后的测试点生成用例
-- 根据 `Web / App` 平台特性补充专项测试点
-- 测试用例使用统一结构化模板输出
-- 生成后增加重复、完整性、平台标签和覆盖缺口校验
-
-## 后续可继续扩展
-- 增加历史缺陷 / 优质用例知识库
-- 增加导出 Excel / Markdown / JSON
-- 增加人工编辑与审批流
-- 增加接口测试用例生成链路
+所有核心类型统一收口到 `frontend/src/types/workflow.ts`。

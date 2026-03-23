@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from enum import Enum
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,14 +24,36 @@ class RiskLevel(str, Enum):
     LOW = "low"
 
 
+class CaseType(str, Enum):
+    FUNCTIONAL = "functional"
+    BOUNDARY = "boundary"
+    EXCEPTION = "exception"
+    PERMISSION = "permission"
+    PLATFORM = "platform"
+    INTEGRATION = "integration"
+
+
+class NoteType(str, Enum):
+    ADDED = "ADDED"
+    REMOVED = "REMOVED"
+    MODIFIED = "MODIFIED"
+    WARNING = "WARNING"
+
+
 class TestCategory(str, Enum):
-    POSITIVE = "正向流程"
-    BOUNDARY = "边界值"
-    EXCEPTION = "异常处理"
-    PERMISSION = "权限控制"
-    STATE = "状态流转"
-    DATA_VALIDATION = "数据校验"
-    PLATFORM = "平台特性"
+    POSITIVE = "positive"
+    BOUNDARY = "boundary"
+    EXCEPTION = "exception"
+    PERMISSION = "permission"
+    STATE = "state"
+    DATA_VALIDATION = "data_validation"
+    PLATFORM = "platform"
+
+
+class HistoryStage(str, Enum):
+    SUMMARY = "summary"
+    TEST_DESIGN = "test_design"
+    CASE_SUITE = "case_suite"
 
 
 class ClarificationQuestion(BaseModel):
@@ -44,10 +69,15 @@ class ClarificationAnswer(BaseModel):
     answer: str
 
 
-# 需求经过第一次分析后的结构化摘要，后续所有阶段都依赖这份摘要。
+class ClarificationGap(BaseModel):
+    field: str
+    detail: str
+    severity: RiskLevel = RiskLevel.MEDIUM
+
+
 class StructuredSummary(BaseModel):
-    title: str
-    business_goal: str
+    title: str = ""
+    business_goal: str = ""
     actors: list[str] = Field(default_factory=list)
     preconditions: list[str] = Field(default_factory=list)
     main_flow: list[str] = Field(default_factory=list)
@@ -57,12 +87,14 @@ class StructuredSummary(BaseModel):
 
 
 class TestPoint(BaseModel):
-    id: str
+    id: str = ""
     title: str
+    function_module: str = ""
     category: TestCategory = TestCategory.POSITIVE
     description: str
     source: str
     risk_level: RiskLevel = RiskLevel.MEDIUM
+    priority: Priority = Priority.P1
     platform_specific: bool = False
 
 
@@ -70,22 +102,26 @@ class ValidationIssue(BaseModel):
     issue_type: str
     message: str
     severity: RiskLevel = RiskLevel.MEDIUM
+    target_type: str = "global"
+    target_id: str = ""
 
 
 class ReviewNote(BaseModel):
-    note_type: str
+    note_type: NoteType
     message: str
     severity: RiskLevel = RiskLevel.MEDIUM
     target_test_point_id: str = ""
 
 
 class TestCase(BaseModel):
-    id: str
+    id: str = ""
     title: str
     function_module: str = ""
-    case_type: str = "functional"
+    case_type: CaseType = CaseType.FUNCTIONAL
     priority: Priority = Priority.P1
     requirement_refs: list[str] = Field(default_factory=list)
+    summary_refs: list[str] = Field(default_factory=list)
+    source_origin: str = ""
     preconditions: list[str] = Field(default_factory=list)
     test_data: list[str] = Field(default_factory=list)
     steps: list[str] = Field(default_factory=list)
@@ -93,12 +129,10 @@ class TestCase(BaseModel):
     coverage_tags: list[str] = Field(default_factory=list)
     platform: PlatformType
     source_test_point_id: str
-    confidence: float = 0.85
 
 
-# 流程联动测试场景，跨模块/跨状态的端到端测试。
 class IntegrationTest(BaseModel):
-    id: str
+    id: str = ""
     title: str
     description: str
     flow: str
@@ -107,9 +141,14 @@ class IntegrationTest(BaseModel):
     expected_results: list[str] = Field(default_factory=list)
 
 
-# --- Request / Response / LLMOutput ---
+class RegressionSuite(BaseModel):
+    id: str
+    title: str
+    description: str
+    case_ids: list[str] = Field(default_factory=list)
+    integration_test_ids: list[str] = Field(default_factory=list)
+    entry_criteria: list[str] = Field(default_factory=list)
 
-# ── 澄清阶段 ──────────────────────────────────────────────────────────────────
 
 class ClarifyRequest(BaseModel):
     platform: PlatformType
@@ -125,7 +164,9 @@ class ClarifyResponse(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
-    has_blocking_questions: bool = False
+    missing_fields: list[ClarificationGap] = Field(default_factory=list)
+    resolved_fields: list[str] = Field(default_factory=list)
+    remaining_risks: list[str] = Field(default_factory=list)
     round: int = 1
     prompts: dict[str, str] = Field(default_factory=dict)
 
@@ -133,14 +174,16 @@ class ClarifyResponse(BaseModel):
 class ClarifyLLMOutput(BaseModel):
     summary: StructuredSummary
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    missing_fields: list[ClarificationGap] = Field(default_factory=list)
+    resolved_fields: list[str] = Field(default_factory=list)
+    remaining_risks: list[str] = Field(default_factory=list)
 
-
-# ── 测试点生成阶段 ────────────────────────────────────────────────────────────
 
 class GenerateTestPointsRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
 
 
 class GenerateTestPointsResponse(BaseModel):
@@ -172,6 +215,7 @@ class ReviewTestPointsResponse(BaseModel):
     platform: PlatformType
     reviewed_test_points: list[TestPoint] = Field(default_factory=list)
     review_notes: list[ReviewNote] = Field(default_factory=list)
+    validation_issues: list[ValidationIssue] = Field(default_factory=list)
     prompts: dict[str, str] = Field(default_factory=dict)
 
 
@@ -184,6 +228,7 @@ class GenerateCasesRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
     functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
     module_segments: dict[str, str] = Field(default_factory=dict)
     selected_test_points: list[TestPoint] = Field(default_factory=list)
 
@@ -191,6 +236,8 @@ class GenerateCasesRequest(BaseModel):
 class GenerateCasesResponse(BaseModel):
     platform: PlatformType
     cases: list[TestCase] = Field(default_factory=list)
+    integration_tests: list[IntegrationTest] = Field(default_factory=list)
+    regression_suites: list[RegressionSuite] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     prompts: dict[str, str] = Field(default_factory=dict)
 
@@ -199,7 +246,6 @@ class GenerateCasesLLMOutput(BaseModel):
     cases: list[TestCase] = Field(default_factory=list)
 
 
-# 流程联动测试请求/响应
 class IntegrationTestsRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
@@ -211,6 +257,7 @@ class IntegrationTestsRequest(BaseModel):
 class IntegrationTestsResponse(BaseModel):
     platform: PlatformType
     integration_tests: list[IntegrationTest] = Field(default_factory=list)
+    validation_issues: list[ValidationIssue] = Field(default_factory=list)
     prompts: dict[str, str] = Field(default_factory=dict)
 
 
@@ -258,12 +305,49 @@ class MetaResponse(BaseModel):
     workflow_steps: list[str]
 
 
+class TaskInputSnapshot(BaseModel):
+    requirement_text: str = ""
+    actors: list[str] = Field(default_factory=list)
+    preconditions: list[str] = Field(default_factory=list)
+    business_rules: list[str] = Field(default_factory=list)
+
+
+class TestDesignSnapshot(BaseModel):
+    summary: StructuredSummary
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+    missing_fields: list[ClarificationGap] = Field(default_factory=list)
+    resolved_fields: list[str] = Field(default_factory=list)
+    remaining_risks: list[str] = Field(default_factory=list)
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
+    test_points: list[TestPoint] = Field(default_factory=list)
+    reviewed_test_points: list[TestPoint] = Field(default_factory=list)
+    review_notes: list[ReviewNote] = Field(default_factory=list)
+
+
+class CaseSuiteSnapshot(BaseModel):
+    cases: list[TestCase] = Field(default_factory=list)
+    integration_tests: list[IntegrationTest] = Field(default_factory=list)
+    regression_suites: list[RegressionSuite] = Field(default_factory=list)
+    validation_issues: list[ValidationIssue] = Field(default_factory=list)
+
+
+class HistoryRecordData(BaseModel):
+    task_input: TaskInputSnapshot
+    test_design: TestDesignSnapshot
+    case_suite: Optional[CaseSuiteSnapshot] = None
+
+
 class HistoryRecord(BaseModel):
     id: str
     title: str
     platform: PlatformType
     project: str = ""
+    stage: HistoryStage = HistoryStage.SUMMARY
     cases_count: int = 0
     integration_count: int = 0
     timestamp: str
-    data: dict = Field(default_factory=dict)
+    data: HistoryRecordData

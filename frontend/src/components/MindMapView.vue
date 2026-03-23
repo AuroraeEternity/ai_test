@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import MindElixir from 'mind-elixir'
 import 'mind-elixir/style.css'
+import type { IntegrationTest, StructuredSummary, TestCase, TestPoint } from '../types/workflow'
 
 interface MindMapNode {
   topic: string
@@ -11,11 +12,11 @@ interface MindMapNode {
 const props = defineProps<{
   apiBaseUrl: string
   platform: string
-  summary: Record<string, unknown>
+  summary: StructuredSummary
   functions: string[]
-  testPoints: Array<Record<string, unknown>>
-  cases: Array<Record<string, unknown>>
-  integrationTests: Array<Record<string, unknown>>
+  testPoints: TestPoint[]
+  cases: TestCase[]
+  integrationTests: IntegrationTest[]
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
@@ -56,8 +57,8 @@ async function copyMindMap() {
 }
 
 function buildCacheKey(): string {
-  const caseIds = (props.cases as Array<{ id?: string }>).map(c => c.id || '').join(',')
-  const itIds = (props.integrationTests as Array<{ id?: string }>).map(t => t.id || '').join(',')
+  const caseIds = props.cases.map(c => c.id || '').join(',')
+  const itIds = props.integrationTests.map(t => t.id || '').join(',')
   return `${props.platform}|${caseIds}|${itIds}`
 }
 
