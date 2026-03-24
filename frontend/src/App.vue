@@ -45,6 +45,7 @@ const currentStep = ref(1)
 const historyRecords = ref<HistoryRecord[]>([])
 const activeHistoryId = ref<string | null>(null)
 const taskActive = ref(false)
+const moduleView = ref<string | null>(null)
 
 const form = reactive<TaskFormState>({
   platform: 'web',
@@ -119,6 +120,7 @@ const resetWorkflowState = () => {
 
 const startNewTask = () => {
   taskActive.value = true
+  moduleView.value = null
   activeHistoryId.value = null
   form.requirementText = ''
   form.actors = ''
@@ -130,7 +132,18 @@ const startNewTask = () => {
 
 const goHome = () => {
   taskActive.value = false
+  moduleView.value = null
   errorMessage.value = ''
+}
+
+const enterWorkflow = () => {
+  if (taskActive.value) return
+  moduleView.value = 'ai-gen-cases'
+}
+
+const startWorkflowFromIntro = () => {
+  startNewTask()
+  moduleView.value = null
 }
 
 const collectClarificationAnswers = (): ClarificationAnswer[] =>
@@ -424,6 +437,7 @@ const loadHistory = async () => {
 
 const loadHistoryRecord = (record: HistoryRecord) => {
   taskActive.value = true
+  moduleView.value = null
   activeHistoryId.value = record.id
   form.platform = record.platform
   form.project = record.project
@@ -507,23 +521,261 @@ onMounted(async () => {
       :task-active="taskActive"
       @go-home="goHome"
       @new-task="startNewTask"
+      @enter-workflow="enterWorkflow"
       @select-record="loadHistoryRecord"
       @delete-record="deleteHistoryRecord"
     />
 
     <main class="app-main">
-      <div v-if="!taskActive" class="welcome-page">
+      <div v-if="!taskActive && !moduleView" class="welcome-page">
         <div class="welcome-content">
+
+          <!-- Hero -->
           <div class="welcome-hero">
-            <div class="welcome-hero-badge">AI Test Platform</div>
-            <h1 class="welcome-title">AI 测试设计工作台</h1>
+            <div class="welcome-hero-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+              AI Test Platform · Beta
+            </div>
+            <h1 class="welcome-title">AI Test</h1>
             <p class="welcome-desc">
-              从需求澄清到摘要确认，再到测试设计和回归资产生成，当前流程已经收口为正式的分阶段工作流。
+              面向测试工程师的 AI 原生工具平台。<br>
+              覆盖测试设计、自动化执行、数据校验，让 AI 参与测试全链路。
             </p>
-            <button class="btn btn-primary welcome-start" @click="startNewTask">
+          </div>
+
+          <!-- Module Cards -->
+          <div class="welcome-modules">
+            <div class="welcome-section-label">功能模块</div>
+            <div class="welcome-module-grid">
+
+              <!-- Active: AI 生成测试用例 -->
+              <div class="module-card module-card--active" @click="enterWorkflow">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #EEF2FF;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                      <polyline points="14 2 14 8 20 8"/>
+                      <line x1="16" y1="13" x2="8" y2="13"/>
+                      <line x1="16" y1="17" x2="8" y2="17"/>
+                      <polyline points="10 9 9 9 8 9"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--live">已上线</span>
+                </div>
+                <div class="module-card-title">AI 生成测试用例</div>
+                <div class="module-card-desc">
+                  从需求文本一键生成结构化测试用例。覆盖需求澄清、摘要确认、测试点设计、用例套件全流程。
+                </div>
+                <div class="module-card-tags">
+                  <span>需求澄清</span>
+                  <span>测试设计</span>
+                  <span>用例生成</span>
+                  <span>回归套件</span>
+                </div>
+                <div class="module-card-action">
+                  开始使用
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                  </svg>
+                </div>
+              </div>
+
+              <!-- Coming soon: Android 埋点测试 -->
+              <div class="module-card module-card--soon">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #F0FDF4;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+                      <line x1="12" y1="18" x2="12.01" y2="18"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--soon">规划中</span>
+                </div>
+                <div class="module-card-title">Android 埋点测试</div>
+                <div class="module-card-desc">
+                  接入 ADB 常用命令，结合 AI 自动验证 Android 埋点数据上报是否符合预期，降低手动验证成本。
+                </div>
+                <div class="module-card-tags">
+                  <span>ADB 命令</span>
+                  <span>埋点验证</span>
+                  <span>自动化</span>
+                </div>
+              </div>
+
+              <!-- Coming soon: BQ 数据校验 -->
+              <div class="module-card module-card--soon">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #FFF7ED;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--soon">规划中</span>
+                </div>
+                <div class="module-card-title">BigQuery 数据校验</div>
+                <div class="module-card-desc">
+                  接入 BigQuery 查询能力，自动比对测试前后数据变化，AI 驱动的数据层验证，无需手写 SQL。
+                </div>
+                <div class="module-card-tags">
+                  <span>BQ 查询</span>
+                  <span>数据比对</span>
+                  <span>自动断言</span>
+                </div>
+              </div>
+
+              <!-- Future: 测试执行闭环 -->
+              <div class="module-card module-card--future">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #F8FAFC;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="23 4 23 10 17 10"/>
+                      <polyline points="1 20 1 14 7 14"/>
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--future">远期</span>
+                </div>
+                <div class="module-card-title">测试执行闭环</div>
+                <div class="module-card-desc">
+                  Agent 化多轮自主测试设计，从用例生成到执行再到结果分析，打通测试全链路闭环。
+                </div>
+                <div class="module-card-tags">
+                  <span>Agent</span>
+                  <span>自动执行</span>
+                  <span>结果分析</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Module intro: AI 生成测试用例 -->
+      <div v-else-if="!taskActive && moduleView === 'ai-gen-cases'" class="module-intro-page">
+        <div class="module-intro-content">
+
+          <div class="module-intro-header">
+            <button class="btn-back" @click="goHome">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+              返回首页
+            </button>
+          </div>
+
+          <div class="module-intro-hero">
+            <div class="module-intro-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </div>
+            <div class="welcome-hero-badge" style="margin-bottom: 0;">
+              <span class="module-status module-status--live" style="font-size:11px">已上线</span>
+            </div>
+            <h1 class="module-intro-title">AI 生成测试用例</h1>
+            <p class="module-intro-desc">
+              输入需求文本，AI 自动完成澄清、摘要、测试点设计、用例生成全流程。<br>
+              从需求到可交付的测试资产，最快几分钟完成。
+            </p>
+            <button class="btn btn-primary module-intro-cta" @click="startWorkflowFromIntro">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
               新建测试任务
             </button>
           </div>
+
+          <!-- 4-step flow -->
+          <div class="module-intro-section">
+            <div class="welcome-section-label">工作流程</div>
+            <div class="welcome-steps">
+              <div class="welcome-step">
+                <div class="welcome-step-header">
+                  <div class="welcome-step-num">1</div>
+                  <div class="welcome-step-line"></div>
+                </div>
+                <div class="welcome-step-title">需求输入</div>
+                <div class="welcome-step-desc">粘贴需求文本或上传 PDF，补充角色、前置条件与业务规则</div>
+              </div>
+              <div class="welcome-step">
+                <div class="welcome-step-header">
+                  <div class="welcome-step-num">2</div>
+                  <div class="welcome-step-line"></div>
+                </div>
+                <div class="welcome-step-title">摘要确认</div>
+                <div class="welcome-step-desc">AI 提取结构化摘要，识别澄清问题和缺失信息，补充后进入设计</div>
+              </div>
+              <div class="welcome-step">
+                <div class="welcome-step-header">
+                  <div class="welcome-step-num">3</div>
+                  <div class="welcome-step-line"></div>
+                </div>
+                <div class="welcome-step-title">测试设计</div>
+                <div class="welcome-step-desc">按功能模块生成测试点，支持 AI 评审、手动增删，选择进入用例</div>
+              </div>
+              <div class="welcome-step">
+                <div class="welcome-step-header">
+                  <div class="welcome-step-num">4</div>
+                </div>
+                <div class="welcome-step-title">用例与资产</div>
+                <div class="welcome-step-desc">生成功能用例、集成测试与回归套件，导出可直接使用的测试资产</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Capabilities -->
+          <div class="module-intro-section">
+            <div class="welcome-section-label">核心能力</div>
+            <div class="welcome-cap-grid">
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background: #EEF2FF;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <div class="welcome-cap-title">需求澄清 · 结构化</div>
+                <div class="welcome-cap-desc">识别缺失字段、阻塞问题，输出结构化摘要，确保测试设计有充足信息基础</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background: #F0FDF4;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                  </svg>
+                </div>
+                <div class="welcome-cap-title">测试点生成 · 模块化</div>
+                <div class="welcome-cap-desc">按功能模块分组，支持 AI 二次评审、手动增删，精准覆盖业务场景</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background: #FFF7ED;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+                  </svg>
+                </div>
+                <div class="welcome-cap-title">用例套件 · 全覆盖</div>
+                <div class="welcome-cap-desc">同时生成功能用例、集成测试，自动去重，配套回归套件，可直接交付</div>
+              </div>
+              <div class="welcome-cap-card">
+                <div class="welcome-cap-icon" style="background: #EFF6FF;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                  </svg>
+                </div>
+                <div class="welcome-cap-title">历史记录 · 可追溯</div>
+                <div class="welcome-cap-desc">每次任务自动快照保存，支持随时回溯历史版本，保留完整设计上下文</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -562,57 +814,20 @@ onMounted(async () => {
           @upload-pdf="handlePdfUpload"
         />
 
-        <div v-else-if="currentStep === 2 && summaryDraft && clarifyResult" class="step-stack">
-          <SummaryConfirmStep
-            :summary="summaryDraft"
-            :clarification-questions="clarifyResult.clarification_questions"
-            :clarification-draft-answers="clarificationDraftAnswers"
-            :loading-refine="refiningSummary"
-            :loading-generate="generatingDesign"
-            @refine="refineSummary"
-            @generate-design="generateDesign"
-          />
-
-          <section class="panel">
-            <div class="panel-header">
-              <div>
-                <div class="panel-eyebrow">Clarify</div>
-                <h2>需求缺口与风险</h2>
-              </div>
-              <span v-if="hasUnansweredBlocking" class="pill pill-danger">存在未回答阻塞问题</span>
-              <span v-else class="pill pill-success">可进入测试设计</span>
-            </div>
-
-            <div class="clarify-grid">
-              <div>
-                <div class="sub-title">缺失字段</div>
-                <div v-if="clarifyResult.missing_fields.length" class="issue-section">
-                  <div v-for="item in clarifyResult.missing_fields" :key="`${item.field}-${item.detail}`" class="issue-item">
-                    <span class="pill" :class="item.severity === 'high' ? 'pill-danger' : 'pill-info'">{{ item.field }}</span>
-                    <span>{{ item.detail }}</span>
-                  </div>
-                </div>
-                <div v-else class="empty-state">当前没有识别到额外缺失字段。</div>
-              </div>
-
-              <div>
-                <div class="sub-title">已明确维度</div>
-                <div class="pill-list" v-if="clarifyResult.resolved_fields.length">
-                  <span v-for="item in clarifyResult.resolved_fields" :key="item" class="pill pill-success">{{ item }}</span>
-                </div>
-                <div v-else class="empty-state">暂无已明确维度。</div>
-
-                <div class="sub-title sub-title-top">剩余风险</div>
-                <div v-if="clarifyResult.remaining_risks.length" class="issue-section">
-                  <div v-for="item in clarifyResult.remaining_risks" :key="item" class="issue-item">
-                    <span>{{ item }}</span>
-                  </div>
-                </div>
-                <div v-else class="empty-state">当前没有明显剩余风险。</div>
-              </div>
-            </div>
-          </section>
-        </div>
+        <SummaryConfirmStep
+          v-else-if="currentStep === 2 && summaryDraft && clarifyResult"
+          :summary="summaryDraft"
+          :clarification-questions="clarifyResult.clarification_questions"
+          :clarification-draft-answers="clarificationDraftAnswers"
+          :missing-fields="clarifyResult.missing_fields"
+          :resolved-fields="clarifyResult.resolved_fields"
+          :remaining-risks="clarifyResult.remaining_risks"
+          :has-unanswered-blocking="hasUnansweredBlocking"
+          :loading-refine="refiningSummary"
+          :loading-generate="generatingDesign"
+          @refine="refineSummary"
+          @generate-design="generateDesign"
+        />
 
         <TestDesignStep
           v-else-if="currentStep === 3 && summaryDraft && designResult"
