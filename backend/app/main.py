@@ -7,6 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .models import (
+    AnalyzeStructureRequest,
+    AnalyzeStructureResponse,
     ClarifyRequest,
     ClarifyResponse,
     GenerateCasesRequest,
@@ -17,8 +19,6 @@ from .models import (
     IntegrationTestsRequest,
     IntegrationTestsResponse,
     MetaResponse,
-    MindMapRequest,
-    MindMapResponse,
     ReviewTestPointsRequest,
     ReviewTestPointsResponse,
 )
@@ -100,6 +100,17 @@ async def clarify(payload: ClarifyRequest) -> ClarifyResponse:
         raise HTTPException(status_code=502, detail=_err_detail("需求澄清失败", exc)) from exc
 
 
+@app.post("/api/workflow/analyze-structure", response_model=AnalyzeStructureResponse)
+async def analyze_structure(payload: AnalyzeStructureRequest) -> AnalyzeStructureResponse:
+    try:
+        return await workflow_service.analyze_structure(payload)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail=_err_detail("结构分析失败", exc)) from exc
+    except Exception as exc:
+        logger.error("analyze-structure 失败:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=502, detail=_err_detail("结构分析失败", exc)) from exc
+
+
 @app.post("/api/workflow/generate-test-points", response_model=GenerateTestPointsResponse)
 async def generate_test_points(payload: GenerateTestPointsRequest) -> GenerateTestPointsResponse:
     try:
@@ -142,17 +153,6 @@ async def integration_tests(payload: IntegrationTestsRequest) -> IntegrationTest
     except Exception as exc:
         logger.error("integration-tests 失败:\n%s", traceback.format_exc())
         raise HTTPException(status_code=502, detail=_err_detail("流程联动测试生成失败", exc)) from exc
-
-
-@app.post("/api/workflow/mindmap", response_model=MindMapResponse)
-async def generate_mindmap(payload: MindMapRequest) -> MindMapResponse:
-    try:
-        return await workflow_service.generate_mindmap(payload)
-    except WorkflowValidationError as exc:
-        raise HTTPException(status_code=400, detail=_err_detail("思维导图生成失败", exc)) from exc
-    except Exception as exc:
-        logger.error("mindmap 失败:\n%s", traceback.format_exc())
-        raise HTTPException(status_code=502, detail=_err_detail("思维导图生成失败", exc)) from exc
 
 
 @app.get("/api/history", response_model=list[HistoryRecord])

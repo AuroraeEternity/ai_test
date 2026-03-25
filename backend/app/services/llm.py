@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -10,6 +11,9 @@ from google.genai import types
 from ..config import Settings
 
 logger = logging.getLogger(__name__)
+
+# LLM 单次调用的超时时间（秒）
+LLM_TIMEOUT_SECONDS = 120
 
 
 class LLMService:
@@ -50,16 +54,23 @@ class LLMService:
         logger.debug("system_prompt=%s", system_prompt)
         logger.debug("user_prompt=%s", user_prompt)
 
-        response = await self.client.aio.models.generate_content(
-            model=self.model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=actual_temperature,
-                response_mime_type="application/json",
-                response_json_schema=json_schema,
-            ),
-        )
+        try:
+            response = await asyncio.wait_for(
+                self.client.aio.models.generate_content(
+                    model=self.model,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=actual_temperature,
+                        response_mime_type="application/json",
+                        response_json_schema=json_schema,
+                    ),
+                ),
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.error("LLM 请求超时 | timeout=%ds", LLM_TIMEOUT_SECONDS)
+            raise TimeoutError(f"LLM 请求超时（{LLM_TIMEOUT_SECONDS}s），请稍后重试。")
 
         usage = getattr(response, "usage_metadata", None)
         if usage:

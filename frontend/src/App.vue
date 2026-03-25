@@ -5,6 +5,7 @@ import HistorySidebar from './components/HistorySidebar.vue'
 import RequirementInputStep from './components/RequirementInputStep.vue'
 import SummaryConfirmStep from './components/SummaryConfirmStep.vue'
 import TestDesignStep from './components/TestDesignStep.vue'
+import { createWorkflowApi, splitLines } from './lib/api'
 import type {
   ClarificationAnswer,
   ClarifyResponse,
@@ -12,6 +13,7 @@ import type {
   GenerateTestPointsResponse,
   HistoryRecord,
   HistoryStage,
+  IntegrationTestsResponse,
   MetaResponse,
   ReviewTestPointsResponse,
   StructuredSummary,
@@ -20,6 +22,7 @@ import type {
 } from './types/workflow'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+const api = createWorkflowApi(apiBaseUrl)
 
 const fallbackMeta: MetaResponse = {
   platforms: [
@@ -45,7 +48,6 @@ const currentStep = ref(1)
 const historyRecords = ref<HistoryRecord[]>([])
 const activeHistoryId = ref<string | null>(null)
 const taskActive = ref(false)
-const moduleView = ref<string | null>(null)
 
 const form = reactive<TaskFormState>({
   platform: 'web',
@@ -61,6 +63,7 @@ const clarifyResult = ref<ClarifyResponse | null>(null)
 const designResult = ref<GenerateTestPointsResponse | null>(null)
 const reviewResult = ref<ReviewTestPointsResponse | null>(null)
 const caseSuite = ref<GenerateCasesResponse | null>(null)
+const integrationResult = ref<IntegrationTestsResponse | null>(null)
 const selectedIds = ref<string[]>([])
 const clarificationDraftAnswers = reactive<Record<string, string>>({})
 
@@ -89,22 +92,9 @@ const hasUnansweredBlocking = computed(() =>
     .some(item => !(clarificationDraftAnswers[item.id] || '').trim()),
 )
 
+const isRequirementComplete = computed(() => clarifyResult.value?.is_complete ?? false)
+
 const serialize = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-
-const formatLines = (value: string) =>
-  value
-    .split(/\n|,|，/)
-    .map(item => item.trim())
-    .filter(Boolean)
-
-const extractErrorMessage = async (response: Response, fallback: string) => {
-  try {
-    const payload = await response.json()
-    return payload.detail || fallback
-  } catch {
-    return fallback
-  }
-}
 
 const resetWorkflowState = () => {
   summaryDraft.value = null
@@ -112,6 +102,7 @@ const resetWorkflowState = () => {
   designResult.value = null
   reviewResult.value = null
   caseSuite.value = null
+  integrationResult.value = null
   selectedIds.value = []
   Object.keys(clarificationDraftAnswers).forEach(key => delete clarificationDraftAnswers[key])
   errorMessage.value = ''
@@ -120,7 +111,6 @@ const resetWorkflowState = () => {
 
 const startNewTask = () => {
   taskActive.value = true
-  moduleView.value = null
   activeHistoryId.value = null
   form.requirementText = ''
   form.actors = ''
@@ -132,18 +122,7 @@ const startNewTask = () => {
 
 const goHome = () => {
   taskActive.value = false
-  moduleView.value = null
   errorMessage.value = ''
-}
-
-const enterWorkflow = () => {
-  if (taskActive.value) return
-  moduleView.value = 'ai-gen-cases'
-}
-
-const startWorkflowFromIntro = () => {
-  startNewTask()
-  moduleView.value = null
 }
 
 const collectClarificationAnswers = (): ClarificationAnswer[] =>
@@ -155,30 +134,12 @@ const collectClarificationAnswers = (): ClarificationAnswer[] =>
       answer: clarificationDraftAnswers[item.id].trim(),
     }))
 
-const callClarifyApi = async (answers: ClarificationAnswer[]) => {
-  const response = await fetch(`${apiBaseUrl}/api/workflow/clarify`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      platform: form.platform,
-      project: form.project,
-      requirement_text: form.requirementText,
-      actors: formatLines(form.actors),
-      preconditions: formatLines(form.preconditions),
-      business_rules: formatLines(form.businessRules),
-      clarification_answers: answers,
-    }),
-  })
-  if (!response.ok) throw new Error(await extractErrorMessage(response, '需求解析失败'))
-  return (await response.json()) as ClarifyResponse
-}
-
 const startClarify = async () => {
   clarifying.value = true
   errorMessage.value = ''
   resetWorkflowState()
   try {
-    const result = await callClarifyApi([])
+    const result = await api.clarify(form, [])
     clarifyResult.value = result
     summaryDraft.value = serialize(result.summary)
     currentStep.value = 2
@@ -194,9 +155,11 @@ const refineSummary = async () => {
   refiningSummary.value = true
   errorMessage.value = ''
   try {
-    const result = await callClarifyApi(collectClarificationAnswers())
+    const result = await api.clarify(form, collectClarificationAnswers())
     clarifyResult.value = result
     summaryDraft.value = serialize(result.summary)
+    // 清空旧的回答，避免新问题的输入框中残留上轮内容
+    Object.keys(clarificationDraftAnswers).forEach(key => delete clarificationDraftAnswers[key])
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '摘要更新失败'
   } finally {
@@ -214,14 +177,14 @@ const saveCurrentHistory = async (stage: HistoryStage) => {
     project: form.project,
     stage,
     cases_count: caseSuite.value?.cases.length || 0,
-    integration_count: caseSuite.value?.integration_tests.length || 0,
+    integration_count: integrationResult.value?.integration_tests.length || 0,
     timestamp: new Date().toISOString(),
     data: {
       task_input: {
         requirement_text: form.requirementText,
-        actors: formatLines(form.actors),
-        preconditions: formatLines(form.preconditions),
-        business_rules: formatLines(form.businessRules),
+        actors: splitLines(form.actors),
+        preconditions: splitLines(form.preconditions),
+        business_rules: splitLines(form.businessRules),
       },
       test_design: {
         summary: serialize(summaryDraft.value),
@@ -241,8 +204,8 @@ const saveCurrentHistory = async (stage: HistoryStage) => {
       case_suite: caseSuite.value
         ? {
             cases: caseSuite.value.cases,
-            integration_tests: caseSuite.value.integration_tests,
-            regression_suites: caseSuite.value.regression_suites,
+            integration_tests: integrationResult.value?.integration_tests || [],
+            regression_suites: [],
             validation_issues: caseSuite.value.validation_issues,
           }
         : null,
@@ -250,15 +213,9 @@ const saveCurrentHistory = async (stage: HistoryStage) => {
   }
 
   try {
-    const response = await fetch(`${apiBaseUrl}/api/history`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(record),
-    })
-    if (response.ok) {
-      activeHistoryId.value = recordId
-      await loadHistory()
-    }
+    await api.saveHistory(record)
+    activeHistoryId.value = recordId
+    await loadHistory()
   } catch {
     // ignore history errors to avoid blocking the main workflow
   }
@@ -269,20 +226,25 @@ const generateDesign = async () => {
   generatingDesign.value = true
   errorMessage.value = ''
   try {
-    const response = await fetch(`${apiBaseUrl}/api/workflow/generate-test-points`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: form.platform,
-        summary: summaryDraft.value,
-        clarification_answers: collectClarificationAnswers(),
-        clarification_questions: clarifyResult.value.clarification_questions,
-      }),
-    })
-    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试设计生成失败'))
-    designResult.value = (await response.json()) as GenerateTestPointsResponse
+    // 链式调用：先结构分析，再测试点生成，用户只等一次
+    const structure = await api.analyzeStructure(
+      form.platform,
+      summaryDraft.value,
+      collectClarificationAnswers(),
+      clarifyResult.value.clarification_questions,
+    )
+    designResult.value = await api.generateTestPoints(
+      form.platform,
+      summaryDraft.value,
+      structure.functions,
+      structure.flows,
+      structure.module_segments,
+      structure.coverage_dimensions,
+      collectClarificationAnswers(),
+    )
     reviewResult.value = null
     caseSuite.value = null
+    integrationResult.value = null
     selectedIds.value = designResult.value.test_points.map(point => point.id)
     currentStep.value = 3
     await saveCurrentHistory('test_design')
@@ -298,18 +260,12 @@ const reviewDesign = async () => {
   reviewing.value = true
   errorMessage.value = ''
   try {
-    const response = await fetch(`${apiBaseUrl}/api/workflow/review-test-points`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: form.platform,
-        summary: summaryDraft.value,
-        clarification_answers: collectClarificationAnswers(),
-        test_points: designResult.value.test_points,
-      }),
-    })
-    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试点评审失败'))
-    reviewResult.value = (await response.json()) as ReviewTestPointsResponse
+    reviewResult.value = await api.reviewTestPoints(
+      form.platform,
+      summaryDraft.value,
+      collectClarificationAnswers(),
+      designResult.value.test_points,
+    )
     selectedIds.value = reviewResult.value.reviewed_test_points.map(point => point.id)
     await saveCurrentHistory('test_design')
   } catch (error) {
@@ -357,31 +313,47 @@ const removePoint = (id: string) => {
   selectedIds.value = selectedIds.value.filter(item => item !== id)
 }
 
+const updatePoint = (updated: TestPoint) => {
+  replaceDisplayedPoints(displayedPoints.value.map(p => p.id === updated.id ? updated : p))
+}
+
 const generateCases = async () => {
   if (!designResult.value || !summaryDraft.value || selectedPoints.value.length === 0) return
   generatingCases.value = true
   errorMessage.value = ''
   try {
-    const response = await fetch(`${apiBaseUrl}/api/workflow/generate-cases`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: form.platform,
-        summary: summaryDraft.value,
-        functions: designResult.value.functions,
-        flows: designResult.value.flows,
-        module_segments: designResult.value.module_segments,
-        selected_test_points: selectedPoints.value,
-      }),
-    })
-    if (!response.ok) throw new Error(await extractErrorMessage(response, '测试用例生成失败'))
-    caseSuite.value = (await response.json()) as GenerateCasesResponse
+    caseSuite.value = await api.generateCaseSuite(
+      form.platform,
+      summaryDraft.value,
+      designResult.value.functions,
+      designResult.value.flows,
+      designResult.value.module_segments,
+      selectedPoints.value,
+    )
+    integrationResult.value = null
     currentStep.value = 4
     await saveCurrentHistory('case_suite')
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '测试用例生成失败'
   } finally {
     generatingCases.value = false
+  }
+}
+
+const generateIntegration = async () => {
+  if (!designResult.value || !summaryDraft.value || !caseSuite.value) return
+  errorMessage.value = ''
+  try {
+    integrationResult.value = await api.generateIntegrationTests(
+      form.platform,
+      summaryDraft.value,
+      designResult.value.flows,
+      selectedPoints.value,
+      caseSuite.value.cases.map(c => c.title),
+    )
+    await saveCurrentHistory('case_suite')
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '联动测试生成失败'
   }
 }
 
@@ -394,14 +366,7 @@ const handlePdfUpload = async (file: File) => {
   pdfFileName.value = file.name
   errorMessage.value = ''
   try {
-    const formData = new FormData()
-    formData.append('file', file)
-    const response = await fetch(`${apiBaseUrl}/api/upload-pdf`, {
-      method: 'POST',
-      body: formData,
-    })
-    if (!response.ok) throw new Error(await extractErrorMessage(response, 'PDF 解析失败'))
-    const data = await response.json()
+    const data = await api.uploadPdf(file)
     form.requirementText = data.text
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'PDF 解析失败'
@@ -414,9 +379,7 @@ const handlePdfUpload = async (file: File) => {
 const loadMeta = async () => {
   loadingMeta.value = true
   try {
-    const response = await fetch(`${apiBaseUrl}/api/meta`)
-    if (!response.ok) throw new Error('获取平台配置失败')
-    meta.value = await response.json()
+    meta.value = await api.getMeta()
   } catch {
     meta.value = fallbackMeta
   } finally {
@@ -426,10 +389,7 @@ const loadMeta = async () => {
 
 const loadHistory = async () => {
   try {
-    const response = await fetch(`${apiBaseUrl}/api/history`)
-    if (response.ok) {
-      historyRecords.value = await response.json()
-    }
+    historyRecords.value = await api.listHistory()
   } catch {
     historyRecords.value = []
   }
@@ -437,7 +397,6 @@ const loadHistory = async () => {
 
 const loadHistoryRecord = (record: HistoryRecord) => {
   taskActive.value = true
-  moduleView.value = null
   activeHistoryId.value = record.id
   form.platform = record.platform
   form.project = record.project
@@ -450,13 +409,15 @@ const loadHistoryRecord = (record: HistoryRecord) => {
     platform: record.platform,
     summary: serialize(record.data.test_design.summary),
     clarification_questions: record.data.test_design.clarification_questions,
+    is_complete: true,
     missing_fields: record.data.test_design.missing_fields,
     resolved_fields: record.data.test_design.resolved_fields,
     remaining_risks: record.data.test_design.remaining_risks,
     round: 1,
     prompts: {},
   }
-  designResult.value = record.data.test_design.functions.length || record.data.test_design.test_points.length
+  // 恢复结构分析结果（从 functions/flows 等字段重建）
+  designResult.value = record.data.test_design.test_points.length
     ? {
         platform: record.platform,
         functions: record.data.test_design.functions,
@@ -480,14 +441,26 @@ const loadHistoryRecord = (record: HistoryRecord) => {
     ? {
         platform: record.platform,
         cases: record.data.case_suite.cases,
-        integration_tests: record.data.case_suite.integration_tests,
-        regression_suites: record.data.case_suite.regression_suites,
         validation_issues: record.data.case_suite.validation_issues,
         prompts: {},
       }
     : null
+  integrationResult.value = record.data.case_suite?.integration_tests?.length
+    ? {
+        platform: record.platform,
+        integration_tests: record.data.case_suite.integration_tests,
+        validation_issues: [],
+        prompts: {},
+      }
+    : null
   selectedIds.value = (reviewResult.value?.reviewed_test_points || designResult.value?.test_points || []).map(point => point.id)
-  currentStep.value = record.stage === 'case_suite' ? 4 : record.stage === 'test_design' ? 3 : 2
+  if (caseSuite.value) {
+    currentStep.value = 4
+  } else if (designResult.value) {
+    currentStep.value = 3
+  } else {
+    currentStep.value = 2
+  }
   Object.keys(clarificationDraftAnswers).forEach(key => delete clarificationDraftAnswers[key])
   for (const item of record.data.test_design.clarification_answers) {
     clarificationDraftAnswers[item.question_id] = item.answer
@@ -497,7 +470,7 @@ const loadHistoryRecord = (record: HistoryRecord) => {
 
 const deleteHistoryRecord = async (id: string) => {
   try {
-    await fetch(`${apiBaseUrl}/api/history/${id}`, { method: 'DELETE' })
+    await api.deleteHistory(id)
     if (activeHistoryId.value === id) {
       activeHistoryId.value = null
       goHome()
@@ -521,13 +494,12 @@ onMounted(async () => {
       :task-active="taskActive"
       @go-home="goHome"
       @new-task="startNewTask"
-      @enter-workflow="enterWorkflow"
       @select-record="loadHistoryRecord"
       @delete-record="deleteHistoryRecord"
     />
 
     <main class="app-main">
-      <div v-if="!taskActive && !moduleView" class="welcome-page">
+      <div v-if="!taskActive" class="welcome-page">
         <div class="welcome-content">
 
           <!-- Hero -->
@@ -541,153 +513,9 @@ onMounted(async () => {
             <h1 class="welcome-title">AI Test</h1>
             <p class="welcome-desc">
               面向测试工程师的 AI 原生工具平台。<br>
-              覆盖测试设计、自动化执行、数据校验，让 AI 参与测试全链路。
-            </p>
-          </div>
-
-          <!-- Module Cards -->
-          <div class="welcome-modules">
-            <div class="welcome-section-label">功能模块</div>
-            <div class="welcome-module-grid">
-
-              <!-- Active: AI 生成测试用例 -->
-              <div class="module-card module-card--active" @click="enterWorkflow">
-                <div class="module-card-header">
-                  <div class="module-card-icon" style="background: #EEF2FF;">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                      <line x1="16" y1="13" x2="8" y2="13"/>
-                      <line x1="16" y1="17" x2="8" y2="17"/>
-                      <polyline points="10 9 9 9 8 9"/>
-                    </svg>
-                  </div>
-                  <span class="module-status module-status--live">已上线</span>
-                </div>
-                <div class="module-card-title">AI 生成测试用例</div>
-                <div class="module-card-desc">
-                  从需求文本一键生成结构化测试用例。覆盖需求澄清、摘要确认、测试点设计、用例套件全流程。
-                </div>
-                <div class="module-card-tags">
-                  <span>需求澄清</span>
-                  <span>测试设计</span>
-                  <span>用例生成</span>
-                  <span>回归套件</span>
-                </div>
-                <div class="module-card-action">
-                  开始使用
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-                  </svg>
-                </div>
-              </div>
-
-              <!-- Coming soon: Android 埋点测试 -->
-              <div class="module-card module-card--soon">
-                <div class="module-card-header">
-                  <div class="module-card-icon" style="background: #F0FDF4;">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-                      <line x1="12" y1="18" x2="12.01" y2="18"/>
-                    </svg>
-                  </div>
-                  <span class="module-status module-status--soon">规划中</span>
-                </div>
-                <div class="module-card-title">Android 埋点测试</div>
-                <div class="module-card-desc">
-                  接入 ADB 常用命令，结合 AI 自动验证 Android 埋点数据上报是否符合预期，降低手动验证成本。
-                </div>
-                <div class="module-card-tags">
-                  <span>ADB 命令</span>
-                  <span>埋点验证</span>
-                  <span>自动化</span>
-                </div>
-              </div>
-
-              <!-- Coming soon: BQ 数据校验 -->
-              <div class="module-card module-card--soon">
-                <div class="module-card-header">
-                  <div class="module-card-icon" style="background: #FFF7ED;">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <ellipse cx="12" cy="5" rx="9" ry="3"/>
-                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-                    </svg>
-                  </div>
-                  <span class="module-status module-status--soon">规划中</span>
-                </div>
-                <div class="module-card-title">BigQuery 数据校验</div>
-                <div class="module-card-desc">
-                  接入 BigQuery 查询能力，自动比对测试前后数据变化，AI 驱动的数据层验证，无需手写 SQL。
-                </div>
-                <div class="module-card-tags">
-                  <span>BQ 查询</span>
-                  <span>数据比对</span>
-                  <span>自动断言</span>
-                </div>
-              </div>
-
-              <!-- Future: 测试执行闭环 -->
-              <div class="module-card module-card--future">
-                <div class="module-card-header">
-                  <div class="module-card-icon" style="background: #F8FAFC;">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="23 4 23 10 17 10"/>
-                      <polyline points="1 20 1 14 7 14"/>
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                    </svg>
-                  </div>
-                  <span class="module-status module-status--future">远期</span>
-                </div>
-                <div class="module-card-title">测试执行闭环</div>
-                <div class="module-card-desc">
-                  Agent 化多轮自主测试设计，从用例生成到执行再到结果分析，打通测试全链路闭环。
-                </div>
-                <div class="module-card-tags">
-                  <span>Agent</span>
-                  <span>自动执行</span>
-                  <span>结果分析</span>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      <!-- Module intro: AI 生成测试用例 -->
-      <div v-else-if="!taskActive && moduleView === 'ai-gen-cases'" class="module-intro-page">
-        <div class="module-intro-content">
-
-          <div class="module-intro-header">
-            <button class="btn-back" @click="goHome">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="15 18 9 12 15 6"/>
-              </svg>
-              返回首页
-            </button>
-          </div>
-
-          <div class="module-intro-hero">
-            <div class="module-intro-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-                <polyline points="10 9 9 9 8 9"/>
-              </svg>
-            </div>
-            <div class="welcome-hero-badge" style="margin-bottom: 0;">
-              <span class="module-status module-status--live" style="font-size:11px">已上线</span>
-            </div>
-            <h1 class="module-intro-title">AI 生成测试用例</h1>
-            <p class="module-intro-desc">
-              输入需求文本，AI 自动完成澄清、摘要、测试点设计、用例生成全流程。<br>
               从需求到可交付的测试资产，最快几分钟完成。
             </p>
-            <button class="btn btn-primary module-intro-cta" @click="startWorkflowFromIntro">
+            <button class="btn btn-primary welcome-cta" @click="startNewTask">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
               </svg>
@@ -696,89 +524,79 @@ onMounted(async () => {
           </div>
 
           <!-- 4-step flow -->
-          <div class="module-intro-section">
+          <div class="welcome-section">
             <div class="welcome-section-label">工作流程</div>
             <div class="welcome-steps">
-              <div class="welcome-step">
+              <div class="welcome-step" v-for="(step, idx) in [
+                { title: '需求输入', desc: '粘贴需求文本或上传 PDF，补充角色与业务规则' },
+                { title: '摘要确认', desc: 'AI 提取结构化摘要，识别澄清问题，人工确认后进入设计' },
+                { title: '测试设计', desc: '按模块生成测试点，支持 AI 评审、手动编辑，选择进入用例' },
+                { title: '用例生成', desc: '生成功能用例与联动测试，导出可直接使用的测试资产' },
+              ]" :key="idx">
                 <div class="welcome-step-header">
-                  <div class="welcome-step-num">1</div>
-                  <div class="welcome-step-line"></div>
+                  <div class="welcome-step-num">{{ idx + 1 }}</div>
+                  <div v-if="idx < 3" class="welcome-step-line"></div>
                 </div>
-                <div class="welcome-step-title">需求输入</div>
-                <div class="welcome-step-desc">粘贴需求文本或上传 PDF，补充角色、前置条件与业务规则</div>
-              </div>
-              <div class="welcome-step">
-                <div class="welcome-step-header">
-                  <div class="welcome-step-num">2</div>
-                  <div class="welcome-step-line"></div>
-                </div>
-                <div class="welcome-step-title">摘要确认</div>
-                <div class="welcome-step-desc">AI 提取结构化摘要，识别澄清问题和缺失信息，补充后进入设计</div>
-              </div>
-              <div class="welcome-step">
-                <div class="welcome-step-header">
-                  <div class="welcome-step-num">3</div>
-                  <div class="welcome-step-line"></div>
-                </div>
-                <div class="welcome-step-title">测试设计</div>
-                <div class="welcome-step-desc">按功能模块生成测试点，支持 AI 评审、手动增删，选择进入用例</div>
-              </div>
-              <div class="welcome-step">
-                <div class="welcome-step-header">
-                  <div class="welcome-step-num">4</div>
-                </div>
-                <div class="welcome-step-title">用例与资产</div>
-                <div class="welcome-step-desc">生成功能用例、集成测试与回归套件，导出可直接使用的测试资产</div>
+                <div class="welcome-step-title">{{ step.title }}</div>
+                <div class="welcome-step-desc">{{ step.desc }}</div>
               </div>
             </div>
           </div>
 
-          <!-- Capabilities -->
-          <div class="module-intro-section">
-            <div class="welcome-section-label">核心能力</div>
-            <div class="welcome-cap-grid">
-              <div class="welcome-cap-card">
-                <div class="welcome-cap-icon" style="background: #EEF2FF;">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-                  </svg>
+          <!-- Module Cards -->
+          <div class="welcome-section">
+            <div class="welcome-section-label">功能模块</div>
+            <div class="welcome-module-grid">
+
+              <div class="module-card module-card--active" @click="startNewTask">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #EEF2FF;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                      <polyline points="14 2 14 8 20 8"/>
+                      <line x1="16" y1="13" x2="8" y2="13"/>
+                      <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--live">可用</span>
                 </div>
-                <div class="welcome-cap-title">需求澄清 · 结构化</div>
-                <div class="welcome-cap-desc">识别缺失字段、阻塞问题，输出结构化摘要，确保测试设计有充足信息基础</div>
+                <div class="module-card-title">AI 生成测试用例</div>
+                <div class="module-card-desc">需求澄清 → 测试点设计 → 用例生成全流程</div>
               </div>
-              <div class="welcome-cap-card">
-                <div class="welcome-cap-icon" style="background: #F0FDF4;">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                  </svg>
+
+              <div class="module-card module-card--soon">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #F0FDF4;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--soon">规划中</span>
                 </div>
-                <div class="welcome-cap-title">测试点生成 · 模块化</div>
-                <div class="welcome-cap-desc">按功能模块分组，支持 AI 二次评审、手动增删，精准覆盖业务场景</div>
+                <div class="module-card-title">Android 埋点测试</div>
+                <div class="module-card-desc">ADB 命令接入，AI 自动验证埋点数据上报</div>
               </div>
-              <div class="welcome-cap-card">
-                <div class="welcome-cap-icon" style="background: #FFF7ED;">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
-                  </svg>
+
+              <div class="module-card module-card--soon">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #FFF7ED;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--soon">规划中</span>
                 </div>
-                <div class="welcome-cap-title">用例套件 · 全覆盖</div>
-                <div class="welcome-cap-desc">同时生成功能用例、集成测试，自动去重，配套回归套件，可直接交付</div>
+                <div class="module-card-title">BigQuery 数据校验</div>
+                <div class="module-card-desc">自动比对测试前后数据变化，AI 驱动数据层验证</div>
               </div>
-              <div class="welcome-cap-card">
-                <div class="welcome-cap-icon" style="background: #EFF6FF;">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
-                  </svg>
-                </div>
-                <div class="welcome-cap-title">历史记录 · 可追溯</div>
-                <div class="welcome-cap-desc">每次任务自动快照保存，支持随时回溯历史版本，保留完整设计上下文</div>
-              </div>
+
             </div>
           </div>
 
         </div>
       </div>
-
       <div v-else class="workbench-layout">
         <div class="step-progress">
           <div
@@ -822,6 +640,7 @@ onMounted(async () => {
           :missing-fields="clarifyResult.missing_fields"
           :resolved-fields="clarifyResult.resolved_fields"
           :remaining-risks="clarifyResult.remaining_risks"
+          :is-complete="isRequirementComplete"
           :has-unanswered-blocking="hasUnansweredBlocking"
           :loading-refine="refiningSummary"
           :loading-generate="generatingDesign"
@@ -846,6 +665,7 @@ onMounted(async () => {
           @generate-cases="generateCases"
           @add-point="addPoint"
           @remove-point="removePoint"
+          @update-point="updatePoint"
         />
 
         <CaseSuiteStep
@@ -856,6 +676,9 @@ onMounted(async () => {
           :design-result="designResult"
           :review-result="reviewResult"
           :case-suite="caseSuite"
+          :integration-result="integrationResult"
+          :selected-points="selectedPoints"
+          @generate-integration="generateIntegration"
         />
       </div>
     </main>

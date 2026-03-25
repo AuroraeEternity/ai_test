@@ -164,6 +164,7 @@ class ClarifyResponse(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+    is_complete: bool = False
     missing_fields: list[ClarificationGap] = Field(default_factory=list)
     resolved_fields: list[str] = Field(default_factory=list)
     remaining_risks: list[str] = Field(default_factory=list)
@@ -174,16 +175,40 @@ class ClarifyResponse(BaseModel):
 class ClarifyLLMOutput(BaseModel):
     summary: StructuredSummary
     clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
-    missing_fields: list[ClarificationGap] = Field(default_factory=list)
-    resolved_fields: list[str] = Field(default_factory=list)
-    remaining_risks: list[str] = Field(default_factory=list)
+    is_complete: bool = False
+
+
+class AnalyzeStructureRequest(BaseModel):
+    platform: PlatformType
+    summary: StructuredSummary
+    clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
+    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
+
+
+class AnalyzeStructureResponse(BaseModel):
+    platform: PlatformType
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
+    prompts: dict[str, str] = Field(default_factory=dict)
+
+
+class AnalyzeStructureLLMOutput(BaseModel):
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
 
 
 class GenerateTestPointsRequest(BaseModel):
     platform: PlatformType
     summary: StructuredSummary
+    functions: list[str] = Field(default_factory=list)
+    flows: list[str] = Field(default_factory=list)
+    module_segments: dict[str, str] = Field(default_factory=dict)
+    coverage_dimensions: list[str] = Field(default_factory=list)
     clarification_answers: list[ClarificationAnswer] = Field(default_factory=list)
-    clarification_questions: list[ClarificationQuestion] = Field(default_factory=list)
 
 
 class GenerateTestPointsResponse(BaseModel):
@@ -197,10 +222,6 @@ class GenerateTestPointsResponse(BaseModel):
 
 
 class GenerateTestPointsLLMOutput(BaseModel):
-    functions: list[str] = Field(default_factory=list)
-    flows: list[str] = Field(default_factory=list)
-    module_segments: dict[str, str] = Field(default_factory=dict)
-    coverage_dimensions: list[str] = Field(default_factory=list)
     test_points: list[TestPoint] = Field(default_factory=list)
 
 
@@ -236,8 +257,6 @@ class GenerateCasesRequest(BaseModel):
 class GenerateCasesResponse(BaseModel):
     platform: PlatformType
     cases: list[TestCase] = Field(default_factory=list)
-    integration_tests: list[IntegrationTest] = Field(default_factory=list)
-    regression_suites: list[RegressionSuite] = Field(default_factory=list)
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
     prompts: dict[str, str] = Field(default_factory=dict)
 
@@ -264,28 +283,6 @@ class IntegrationTestsResponse(BaseModel):
 class IntegrationTestsLLMOutput(BaseModel):
     integration_tests: list[IntegrationTest] = Field(default_factory=list)
 
-
-class MindMapNode(BaseModel):
-    topic: str
-    children: list["MindMapNode"] = Field(default_factory=list)
-
-
-class MindMapRequest(BaseModel):
-    platform: PlatformType
-    summary: StructuredSummary
-    functions: list[str] = Field(default_factory=list)
-    test_points: list[TestPoint] = Field(default_factory=list)
-    cases: list[TestCase] = Field(default_factory=list)
-    integration_tests: list[IntegrationTest] = Field(default_factory=list)
-
-
-class MindMapResponse(BaseModel):
-    root: MindMapNode
-    prompts: dict[str, str] = Field(default_factory=dict)
-
-
-class MindMapLLMOutput(BaseModel):
-    root: MindMapNode
 
 
 class PlatformOption(BaseModel):

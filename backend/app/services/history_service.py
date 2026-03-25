@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from pathlib import Path
 
 from ..models import (
@@ -15,6 +17,9 @@ from ..models import (
 )
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+logger = logging.getLogger(__name__)
+
+_VALID_ID_PATTERN = re.compile(r"^[\w\-]+$")
 
 
 class HistoryService:
@@ -22,8 +27,9 @@ class HistoryService:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     def _record_path(self, record_id: str) -> Path:
-        safe_id = record_id.replace("/", "_").replace("..", "_")
-        return DATA_DIR / f"{safe_id}.json"
+        if not _VALID_ID_PATTERN.match(record_id):
+            raise ValueError(f"非法的 record_id: {record_id}")
+        return DATA_DIR / f"{record_id}.json"
 
     def list_records(self) -> list[HistoryRecord]:
         records: list[HistoryRecord] = []
@@ -33,7 +39,10 @@ class HistoryService:
                 record = self._parse_record(raw)
                 if record:
                     records.append(record)
+                else:
+                    logger.warning("历史记录解析返回 None | file=%s", f.name)
             except Exception:
+                logger.warning("历史记录解析失败 | file=%s", f.name, exc_info=True)
                 continue
         records.sort(key=lambda r: r.timestamp, reverse=True)
         return records
@@ -51,6 +60,7 @@ class HistoryService:
             raw = json.loads(path.read_text(encoding="utf-8"))
             return self._parse_record(raw)
         except Exception:
+            logger.warning("历史记录读取失败 | id=%s", record_id, exc_info=True)
             return None
 
     def delete_record(self, record_id: str) -> bool:
@@ -64,6 +74,7 @@ class HistoryService:
         try:
             return HistoryRecord(**raw)
         except Exception:
+            logger.debug("标准格式解析失败，尝试旧格式兼容", exc_info=True)
             return self._convert_legacy_record(raw)
 
     def _convert_legacy_record(self, raw: dict) -> HistoryRecord | None:

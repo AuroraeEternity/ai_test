@@ -4,8 +4,10 @@ import MindMapView from './MindMapView.vue'
 import type {
   GenerateCasesResponse,
   GenerateTestPointsResponse,
+  IntegrationTestsResponse,
   ReviewTestPointsResponse,
   StructuredSummary,
+  TestPoint,
   ValidationIssue,
 } from '../types/workflow'
 
@@ -16,16 +18,24 @@ const props = defineProps<{
   designResult: GenerateTestPointsResponse
   reviewResult: ReviewTestPointsResponse | null
   caseSuite: GenerateCasesResponse
+  integrationResult: IntegrationTestsResponse | null
+  selectedPoints: TestPoint[]
+}>()
+
+const emit = defineEmits<{
+  generateIntegration: []
 }>()
 
 const mode = ref<'list' | 'mindmap'>('list')
-const filter = ref<'all' | 'cases' | 'integration' | 'regression'>('all')
+const filter = ref<'all' | 'cases' | 'integration'>('all')
 
 const points = computed(() =>
   props.reviewResult?.reviewed_test_points.length
     ? props.reviewResult.reviewed_test_points
     : props.designResult.test_points,
 )
+
+const integrationTests = computed(() => props.integrationResult?.integration_tests || [])
 
 const issuesByCase = computed(() => {
   const map: Record<string, ValidationIssue[]> = {}
@@ -73,7 +83,7 @@ const exportCsv = () => {
 const exportIntegrationCsv = () => {
   const BOM = '\uFEFF'
   const headers = ['ID', '标题', '描述', '关联流程', '前置条件', '步骤', '预期结果']
-  const rows = props.caseSuite.integration_tests.map(t => [
+  const rows = integrationTests.value.map(t => [
     t.id,
     t.title,
     t.description,
@@ -120,11 +130,7 @@ const exportIntegrationCsv = () => {
       </div>
       <div class="stat-card">
         <span class="stat-label">联动测试</span>
-        <strong>{{ caseSuite.integration_tests.length }}</strong>
-      </div>
-      <div class="stat-card">
-        <span class="stat-label">回归集</span>
-        <strong>{{ caseSuite.regression_suites.length }}</strong>
+        <strong>{{ integrationTests.length }}</strong>
       </div>
       <div class="stat-card">
         <span class="stat-label">质量问题</span>
@@ -140,7 +146,7 @@ const exportIntegrationCsv = () => {
       :functions="designResult.functions"
       :test-points="points"
       :cases="caseSuite.cases"
-      :integration-tests="caseSuite.integration_tests"
+      :integration-tests="integrationTests"
     />
 
     <template v-else>
@@ -149,7 +155,6 @@ const exportIntegrationCsv = () => {
           <button class="btn btn-ghost" :class="{ active: filter === 'all' }" @click="filter = 'all'">全部</button>
           <button class="btn btn-ghost" :class="{ active: filter === 'cases' }" @click="filter = 'cases'">功能用例</button>
           <button class="btn btn-ghost" :class="{ active: filter === 'integration' }" @click="filter = 'integration'">联动测试</button>
-          <button class="btn btn-ghost" :class="{ active: filter === 'regression' }" @click="filter = 'regression'">回归集</button>
         </div>
         <div class="toolbar-group">
           <button
@@ -160,7 +165,7 @@ const exportIntegrationCsv = () => {
             导出功能用例 CSV
           </button>
           <button
-            v-if="(filter === 'all' || filter === 'integration') && caseSuite.integration_tests.length"
+            v-if="(filter === 'all' || filter === 'integration') && integrationTests.length"
             class="btn btn-secondary btn-sm"
             @click="exportIntegrationCsv"
           >
@@ -178,24 +183,6 @@ const exportIntegrationCsv = () => {
         >
           <span class="pill" :class="issue.severity === 'high' ? 'pill-danger' : 'pill-info'">{{ issue.severity }}</span>
           <span>{{ issue.message }}</span>
-        </div>
-      </div>
-
-      <div v-if="filter === 'all' || filter === 'regression'" class="suite-section">
-        <div class="sub-title">回归集</div>
-        <div v-for="suite in caseSuite.regression_suites" :key="suite.id" class="suite-card">
-          <div class="suite-top">
-            <strong>{{ suite.title }}</strong>
-            <span class="pill">{{ suite.id }}</span>
-          </div>
-          <p>{{ suite.description }}</p>
-          <div class="suite-meta">
-            <span>{{ suite.case_ids.length }} 功能用例</span>
-            <span>{{ suite.integration_test_ids.length }} 联动测试</span>
-          </div>
-          <ul>
-            <li v-for="item in suite.entry_criteria" :key="item">{{ item }}</li>
-          </ul>
         </div>
       </div>
 
@@ -243,9 +230,18 @@ const exportIntegrationCsv = () => {
       </div>
 
       <div v-if="filter === 'all' || filter === 'integration'" class="suite-section">
-        <div class="sub-title">联动测试</div>
-        <div v-if="caseSuite.integration_tests.length === 0" class="empty-state">当前没有生成联动测试。</div>
-        <div v-for="item in caseSuite.integration_tests" :key="item.id" class="case-card">
+        <div class="sub-title" style="display:flex;align-items:center;gap:8px">
+          联动测试
+          <button
+            v-if="integrationTests.length === 0"
+            class="btn btn-secondary btn-sm"
+            @click="emit('generateIntegration')"
+          >
+            生成联动测试
+          </button>
+        </div>
+        <div v-if="integrationTests.length === 0" class="empty-state">点击上方按钮生成跨模块联动测试场景。</div>
+        <div v-for="item in integrationTests" :key="item.id" class="case-card">
           <div class="suite-top">
             <strong>{{ item.id }} {{ item.title }}</strong>
             <span class="pill">{{ item.flow }}</span>

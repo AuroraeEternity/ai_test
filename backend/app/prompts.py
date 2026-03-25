@@ -3,11 +3,11 @@ from __future__ import annotations
 from textwrap import dedent
 
 from .models import (
+    AnalyzeStructureRequest,
     ClarifyRequest,
     GenerateCasesRequest,
     GenerateTestPointsRequest,
     IntegrationTestsRequest,
-    MindMapRequest,
     PlatformType,
     ReviewTestPointsRequest,
 )
@@ -69,21 +69,32 @@ def build_clarify_system_prompt() -> str:
 
         ──── 你的核心职责 ────
         1. 将原始需求整理为 QA 团队可直接确认的结构化摘要。
-        2. 识别需求中模糊、缺失或矛盾的信息，生成高质量的澄清问题。
+        2. 判断当前信息是否已达到"可测试"的清晰度。
+        3. 提出高质量的澄清问题，每个问题都应该能具体改善测试设计。
 
         ──── summary 结构化摘要的填写规范 ────
         每个字段都必须有实质内容，不可留空或敷衍：
         • title：一句话概括功能名称，不超过 20 字
         • business_goal：该功能要解决什么业务问题、为用户带来什么价值
-        • actors：所有参与角色（如管理员、普通用户、游客、系统），至少列出 2 个
+        • actors：所有参与角色（如管理员、普通用户、游客、系统），至少列出 2 个，必须具体化（不能只写"用户"）
         • preconditions：执行该功能前必须满足的条件（如登录状态、数据已存在、权限已配置）
-        • main_flow：核心成功路径的操作步骤，按序号排列，每步描述"谁做什么得到什么结果"
-        • exception_flows：可能出现的异常/失败路径，每条包含触发条件和系统行为
-        • business_rules：约束规则、校验规则、计算公式、状态机、频率限制等
+        • main_flow：核心成功路径的操作步骤，按序号排列，每步描述"谁做什么得到什么结果"，至少 4 个步骤
+        • exception_flows：可能出现的异常/失败路径，每条包含触发条件和系统行为，至少 3 条
+        • business_rules：约束规则、校验规则、计算公式、状态机、频率限制等，至少 2 条
         • platform_focus：当前平台（Web/App/Plugin）需要特别关注的测试维度
 
-        ──── 需求分析清单（你必须逐项检查） ────
-        在整理摘要时，请依次检查以下维度，如果原始需求未覆盖则补充到 clarification_questions：
+        ──── 摘要质量标准（不只是"有内容"，而是"足够具体"） ────
+        以下情况视为质量不达标，即使字段非空：
+        • main_flow 步骤模糊（如"用户操作系统"），应拆解为具体的页面/按钮/输入操作
+        • actors 只有泛称（如"用户""管理员"），应补充角色的具体权限差异
+        • business_rules 只有方向性描述（如"需要校验"），应给出具体的校验规则和阈值
+        • exception_flows 只列了场景名（如"网络异常"），应描述触发条件和系统具体行为
+
+        如果原始需求信息不足以达到上述质量标准，在 summary 中用"[待确认: 具体缺什么]"标注，
+        同时在 clarification_questions 中提出对应问题。
+
+        ──── 需求分析清单（逐项检查） ────
+        在整理摘要时，请依次检查以下维度，发现不清晰或缺失时提出澄清问题：
         □ 功能边界：该功能的起点和终点在哪里？与哪些已有功能有交集？
         □ 数据流向：数据从哪里来、经过什么处理、最终存储或展示在哪里？
         □ 异常与容错：网络断开、服务超时、数据异常时系统如何表现？
@@ -93,42 +104,65 @@ def build_clarify_system_prompt() -> str:
         □ 性能期望：列表最大数据量？接口响应时间上限？文件大小限制？
         □ 兼容性：最低支持的浏览器/系统版本？多语言/时区/货币？
 
-        ──── clarification_questions 问题分级策略 ────
-        • blocking=true（阻塞级）：不回答这个问题，测试范围会出现重大偏差或遗漏。
-          示例：主流程有分支但需求未说明选择条件；涉及金额计算但未给出精度规则。
-        • blocking=false（建议级）：即使不回答也能进行基本测试设计，但回答后能提高覆盖质量。
-          示例：异常场景下的具体文案；低频边界条件的处理策略。
-        • 每个问题必须包含 reason 说明"为什么测试需要知道这个信息"。
-        • 如果已有 clarification_answers，必须将回答整合到 summary 中，不可重复追问。
-        • 问题数量控制在 3-8 个，按重要性排序。
+        ──── 完备性判断（is_complete） ────
+        你必须判断当前信息是否已达到可测试的清晰度：
+        • is_complete=true 的条件（必须同时满足）：
+          - main_flow 有 ≥4 个具体操作步骤（不是模糊描述）
+          - actors 有 ≥2 个角色且能区分权限差异
+          - business_goal 明确到可以推导出验收标准
+          - business_rules 有 ≥2 条具体的可验证规则
+          - exception_flows 有 ≥2 条含触发条件的异常路径
+        • is_complete=true 时：clarification_questions 返回空数组 []
+        • is_complete=false 时：提出所有有价值的澄清问题
 
-        ──── 缺口结构输出要求 ────
-        除了 clarification_questions，还必须输出：
-        • missing_fields：列出仍缺失的信息维度，字段名使用简短英文标识，detail 描述缺什么以及为什么影响测试
-        • resolved_fields：列出本轮已经明确的关键维度，例如 actors、main_flow、permission_scope
-        • remaining_risks：列出即使继续推进也会影响测试质量的残余风险
+        ──── 提问策略（核心原则：高质量，有价值就提） ────
+        每个问题必须能具体改善测试设计。问题数量不设硬上限，但每个问题必须通过以下检验：
+        "如果 QA 知道了这个答案，测试设计会有什么具体变化？"
+        如果答案是"没什么变化"或"只是更完善一点"，就不要提。
+
+        问题质量要求：
+        • 具体而非笼统：不要问"异常情况怎么处理"，要问"当用户提交的金额超过账户余额时，系统是拒绝提交还是允许透支？"
+        • 面向测试场景：问题的答案应该直接对应一个或多个测试场景
+        • 不可拆分原则：如果一个维度只需要一个问题就能搞清楚，不要拆成多个子问题
+        • 每个问题必须包含 reason 说明"不回答会导致什么具体的测试缺失"
+
+        blocking=true 的判定标准（仅限以下情况）：
+        • 主流程存在分支但未说明走向，导致无法确定测试范围
+        • 涉及金额/积分等数值计算但未给出精度或公式，导致无法写预期结果
+        • 多个角色权限边界完全不明确，导致无法判断测试覆盖
+        其余情况一律 blocking=false。
+
+        禁止：
+        • 过度拆分：一个维度的问题不要拆成多个子问题
+        • 低价值发散：错误文案措辞、UI 颜色偏好、不影响逻辑的细节
+        • 变相重复：换个说法问同样的事
 
         ──── 输出要求 ────
-        输出必须是严格 JSON，不能包含解释性文字。
+        输出必须是严格 JSON，包含 summary、clarification_questions、is_complete 三个字段。
+        不能包含解释性文字。
         """
     ).strip()
 
 
 def build_clarify_user_prompt(payload: ClarifyRequest) -> str:
     project_line = f"所属项目：{payload.project}" if payload.project else "所属项目：未指定"
-    answers_section = "暂无已确认的澄清回答。"
+
     if payload.clarification_answers:
         answers_text = "\n".join(
             f"- 问题：{item.question}\n  回答：{item.answer}"
             for item in payload.clarification_answers
         )
-        answers_section = f"已确认的澄清回答（必须整合到 summary 中）：\n{answers_text}"
+        answers_section = f"已确认的澄清回答（必须整合到 summary 中，不可重复追问）：\n{answers_text}"
+        task_line = "当前任务：整合用户回答更新摘要，判断信息是否已足够支撑测试设计。如果已足够，is_complete=true 且不再提问。"
+    else:
+        answers_section = "暂无已确认的澄清回答。"
+        task_line = "当前任务：整理需求摘要，判断信息完备性，用最少的问题达到可测试的清晰度。"
 
     platform_tips = _platform_guidance(payload.platform)
 
     return dedent(
         f"""
-        当前任务：整理需求摘要并识别仍需 QA 确认的问题。
+        {task_line}
 
         平台：{payload.platform.value}
         {project_line}
@@ -151,13 +185,82 @@ def build_clarify_user_prompt(payload: ClarifyRequest) -> str:
 
 
 # ════════════════════════════════════════════════════════════
-# 2. GENERATE TEST POINTS（测试点生成）
+# 2a. ANALYZE STRUCTURE（测试结构分析）
+# ════════════════════════════════════════════════════════════
+
+def build_analyze_structure_system_prompt() -> str:
+    return dedent(
+        """
+        你是一名拥有 10 年经验的高级测试设计专家，负责从已确认的需求摘要中提取测试设计的结构框架。
+
+        ──── 你的职责 ────
+        分析需求摘要，输出以下四项结构信息，供 QA 团队确认后再进入测试点生成：
+
+        ──── 输出结构要求 ────
+        • functions：功能模块列表（通常 2-6 个），每个模块应代表一个独立可测试的功能域
+        • flows：业务流/端到端流程列表（如"用户注册 → 邮箱验证 → 首次登录"），描述跨模块的关键路径
+        • module_segments：每个功能模块的核心描述（1-3 句话，用于后续测试点生成的上下文）
+        • coverage_dimensions：测试覆盖维度（如"接口校验""权限隔离""数据一致性"），帮助 QA 确认覆盖面
+
+        ──── 模块拆分原则 ────
+        • 每个模块应有清晰的边界和独立的输入/输出
+        • 避免粒度过细（不要把每个按钮当模块）或过粗（不要把所有功能放一个模块）
+        • 考虑角色维度：不同角色的功能入口可能属于不同模块
+
+        ──── 业务流识别原则 ────
+        • 从用户视角出发，识别从起点到终点的完整操作路径
+        • 包含主成功路径和关键备选路径
+        • 每个 flow 应跨越至少 2 个功能模块
+
+        ──── 输出要求 ────
+        输出必须是严格 JSON，不能包含解释性文字。
+        """
+    ).strip()
+
+
+def build_analyze_structure_user_prompt(payload: AnalyzeStructureRequest) -> str:
+    answers_section = "暂无补充澄清回答。"
+    if payload.clarification_answers:
+        answers_text = "\n".join(
+            f"- 问题：{item.question}\n  回答：{item.answer}"
+            for item in payload.clarification_answers
+        )
+        answers_section = f"澄清回答：\n{answers_text}"
+
+    platform_tips = _platform_guidance(payload.platform)
+
+    return dedent(
+        f"""
+        当前任务：分析需求结构，输出功能模块、业务流、模块描述和覆盖维度。
+
+        平台：{payload.platform.value}
+
+        ────── 已确认的需求摘要 ──────
+        标题：{payload.summary.title}
+        业务目标：{payload.summary.business_goal}
+        角色：{payload.summary.actors}
+        前置条件：{payload.summary.preconditions}
+        主流程：{payload.summary.main_flow}
+        异常流程：{payload.summary.exception_flows}
+        业务规则：{payload.summary.business_rules}
+        平台关注点：{payload.summary.platform_focus}
+
+        {answers_section}
+
+        ────── 平台专项指引 ──────
+        {platform_tips or '无'}
+        """
+    ).strip()
+
+
+# ════════════════════════════════════════════════════════════
+# 2b. GENERATE TEST POINTS（测试点生成）
 # ════════════════════════════════════════════════════════════
 
 def build_generate_test_points_system_prompt() -> str:
     return dedent(
         f"""
-        你是一名拥有 10 年经验的高级测试设计专家，精通测试设计方法论，负责输出 QA 可直接评审的测试设计结果。
+        你是一名拥有 10 年经验的高级测试设计专家，精通测试设计方法论，负责基于已确认的功能模块结构生成测试点。
 
         ──── 测试设计方法论（必须综合运用） ────
         在生成测试点时，你必须结合以下方法，而不是仅凭直觉罗列：
@@ -168,17 +271,14 @@ def build_generate_test_points_system_prompt() -> str:
         5. 判定表/因果图：对于有多个条件组合影响结果的场景，穷举关键组合
         6. 场景法：从用户角度构造端到端场景，覆盖主流程和典型备选流程
 
-        ──── 输出结构要求 ────
-        先识别以下四项，再生成 test_points：
-        • functions：功能模块列表（通常 2-6 个）
-        • flows：业务流/端到端流程列表（如"用户注册 → 邮箱验证 → 首次登录"）
-        • module_segments：每个功能模块的核心描述（用于后续用例生成的上下文）
-        • coverage_dimensions：测试覆盖维度（如"接口校验""权限隔离""数据一致性"）
+        ──── 输出要求 ────
+        基于输入中已确认的 functions 和 module_segments，直接生成 test_points 列表。
+        不要重新生成 functions / flows / module_segments / coverage_dimensions。
 
         ──── 每个 test_point 的字段要求 ────
         • id：使用 TP-001 递增格式
         • title：简洁明确，10-20 字，说明"测什么"而不是"怎么测"
-        • function_module：必须从 functions 列表中取值
+        • function_module：必须从输入的 functions 列表中取值
         • category：只能取 {CATEGORY_VALUES}
         • description：2-3 句话说明测试目的、输入条件和预期判断标准
         • source：来源说明（如"PRD 第3条业务规则""等价类-无效输入""错误推测-并发场景"）
@@ -220,7 +320,7 @@ def build_generate_test_points_system_prompt() -> str:
         }}
 
         ──── 输出要求 ────
-        输出必须是严格 JSON，不能包含解释性文字。
+        输出必须是严格 JSON，只包含 test_points 数组，不能包含解释性文字。
         """
     ).strip()
 
@@ -236,9 +336,13 @@ def build_generate_test_points_user_prompt(payload: GenerateTestPointsRequest) -
 
     platform_tips = _platform_guidance(payload.platform)
 
+    module_segments_text = "\n".join(
+        f"- {name}: {desc}" for name, desc in payload.module_segments.items()
+    ) or "无"
+
     return dedent(
         f"""
-        当前任务：基于已经人工确认的需求摘要，生成完整的测试设计初稿。
+        当前任务：基于已确认的功能模块结构和需求摘要，生成完整的测试点列表。
 
         平台：{payload.platform.value}
 
@@ -251,6 +355,18 @@ def build_generate_test_points_user_prompt(payload: GenerateTestPointsRequest) -
         异常流程：{payload.summary.exception_flows}
         业务规则：{payload.summary.business_rules}
         平台关注点：{payload.summary.platform_focus}
+
+        ────── 已确认的功能模块 ──────
+        {payload.functions}
+
+        ────── 模块详情 ──────
+        {module_segments_text}
+
+        ────── 已确认的业务流 ──────
+        {payload.flows}
+
+        ────── 覆盖维度 ──────
+        {payload.coverage_dimensions}
 
         {answers_section}
 
@@ -571,67 +687,5 @@ def build_integration_user_prompt(payload: IntegrationTestsRequest) -> str:
         1. 每个 flow 至少生成 1 条联动测试
         2. 重点覆盖跨模块数据传递和状态同步
         3. 包含至少 1 条异常/回滚场景的联动测试
-        """
-    ).strip()
-
-
-# ════════════════════════════════════════════════════════════
-# 6. MIND MAP（脑图生成）
-# ════════════════════════════════════════════════════════════
-
-def build_mindmap_system_prompt() -> str:
-    return dedent(
-        """
-        你是一名高级测试设计专家，负责生成测试设计脑图。脑图用于表达"测什么"的设计视角，而非执行步骤。
-
-        ──── 严格 5 层结构规范 ────
-        层级 1（根节点）：功能标题
-        层级 2：功能模块（取自 functions 列表）
-        层级 3：业务维度（从以下推荐列表中选取适用项，也可自定义，空维度跳过不输出）
-           推荐维度：正向流程 / 反向流程 / 边界值 / 数据校验 / 权限控制 / 状态流转 / 异常容错 / 平台专项 / 性能边界
-        层级 4：具体测试点（简洁短语，<=10 字）
-        层级 5：仅在需要进一步拆分时使用（如同一测试点的多个子检查项）
-
-        ──── 节点规则 ────
-        • 每个节点必须是名词或短语，禁止使用完整句子
-        • 每个节点 ≤ 10 个字
-        • 禁止包含：测试步骤、预期结果、TC 编号、TP 编号
-        • 同一父节点下的子节点不可重复或语义高度相似
-
-        ──── 去重与合并规则 ────
-        • 相同逻辑只保留一个节点
-        • 如果一个测试点同时属于两个模块，只放在更核心的模块下
-        • 联动测试点在层级 2 中使用独立的"流程联动"模块分组
-
-        ──── 输出要求 ────
-        输出 JSON 结构 {{ "root": {{ "topic": "...", "children": [...] }} }}
-        输出必须是严格 JSON，不能包含解释性文字。
-        """
-    ).strip()
-
-
-def build_mindmap_user_prompt(payload: MindMapRequest) -> str:
-    func_list = payload.functions or ["未提取"]
-    point_titles = [f"{item.function_module or '未归类'} | {item.title}" for item in payload.test_points]
-    case_titles = [f"{item.function_module or '未归类'} | {item.title}" for item in payload.cases]
-    integration_titles = [f"{item.title} | {item.flow}" for item in payload.integration_tests] or ["无"]
-
-    return dedent(
-        f"""
-        当前任务：生成测试设计脑图（表达"测什么"而非"怎么测"）。
-
-        功能标题：{payload.summary.title}
-        功能模块：{func_list}
-
-        ────── 测试点 ──────
-        {chr(10).join(f'- {t}' for t in point_titles)}
-
-        ────── 功能用例 ──────
-        {chr(10).join(f'- {t}' for t in case_titles)}
-
-        ────── 联动测试 ──────
-        {chr(10).join(f'- {t}' for t in integration_titles)}
-
-        请严格按照 5 层结构组织脑图节点，每个节点 ≤ 10 字。
         """
     ).strip()

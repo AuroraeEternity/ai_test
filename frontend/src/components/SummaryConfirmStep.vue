@@ -9,6 +9,7 @@ const props = defineProps<{
   missingFields: ClarificationGap[]
   resolvedFields: string[]
   remainingRisks: string[]
+  isComplete: boolean
   hasUnansweredBlocking: boolean
   loadingRefine: boolean
   loadingGenerate: boolean
@@ -174,9 +175,12 @@ const textToList = (value: string) =>
     <div class="sc-side">
 
       <!-- Status Banner -->
-      <div class="sc-status" :class="hasUnansweredBlocking ? 'sc-status--block' : 'sc-status--ok'">
+      <div class="sc-status" :class="isComplete ? 'sc-status--ok' : hasUnansweredBlocking ? 'sc-status--block' : 'sc-status--ok'">
         <div class="sc-status-icon">
-          <svg v-if="hasUnansweredBlocking" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-if="isComplete" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <svg v-else-if="hasUnansweredBlocking" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
@@ -185,8 +189,8 @@ const textToList = (value: string) =>
           </svg>
         </div>
         <div>
-          <div class="sc-status-title">{{ hasUnansweredBlocking ? '有阻塞问题待确认' : '可以进入测试设计' }}</div>
-          <div class="sc-status-sub">{{ hasUnansweredBlocking ? '请回答下方标红问题后再继续' : '所有关键信息已齐备' }}</div>
+          <div class="sc-status-title">{{ isComplete ? '需求信息已就绪' : hasUnansweredBlocking ? '有阻塞问题待确认' : '可以进入测试设计' }}</div>
+          <div class="sc-status-sub">{{ isComplete ? 'AI 判定信息已足够支撑测试设计' : hasUnansweredBlocking ? '建议回答下方标红问题以提高覆盖质量' : '所有关键信息已齐备' }}</div>
         </div>
       </div>
 
@@ -264,7 +268,7 @@ const textToList = (value: string) =>
       <div class="sc-actions">
         <button
           class="btn btn-primary sc-btn-generate"
-          :disabled="loadingGenerate || hasUnansweredBlocking"
+          :disabled="loadingGenerate"
           @click="emit('generateDesign')"
         >
           <svg v-if="!loadingGenerate" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -273,6 +277,7 @@ const textToList = (value: string) =>
           {{ loadingGenerate ? '生成中…' : '确认生成测试设计' }}
         </button>
         <button
+          v-if="clarificationQuestions.length > 0"
           class="btn btn-default sc-btn-refine"
           :disabled="loadingRefine || !hasAnyAnswer"
           :title="!hasAnyAnswer ? '请先回答至少一个问题' : undefined"

@@ -1,9 +1,12 @@
 import type {
+  AnalyzeStructureResponse,
   ClarificationAnswer,
+  ClarificationQuestion,
   ClarifyResponse,
   GenerateCasesResponse,
   GenerateTestPointsResponse,
   HistoryRecord,
+  IntegrationTestsResponse,
   MetaResponse,
   ReviewTestPointsResponse,
   StructuredSummary,
@@ -63,9 +66,35 @@ export const createWorkflowApi = (baseUrl: string) => ({
     )
   },
 
+  async analyzeStructure(
+    platform: Platform,
+    summary: StructuredSummary,
+    clarificationAnswers: ClarificationAnswer[],
+    clarificationQuestions: ClarificationQuestion[],
+  ): Promise<AnalyzeStructureResponse> {
+    return requestJson<AnalyzeStructureResponse>(
+      `${baseUrl}/api/workflow/analyze-structure`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform,
+          summary,
+          clarification_answers: clarificationAnswers,
+          clarification_questions: clarificationQuestions,
+        }),
+      },
+      '结构分析失败',
+    )
+  },
+
   async generateTestPoints(
     platform: Platform,
     summary: StructuredSummary,
+    functions: string[],
+    flows: string[],
+    moduleSegments: Record<string, string>,
+    coverageDimensions: string[],
     clarificationAnswers: ClarificationAnswer[],
   ): Promise<GenerateTestPointsResponse> {
     return requestJson<GenerateTestPointsResponse>(
@@ -76,6 +105,10 @@ export const createWorkflowApi = (baseUrl: string) => ({
         body: JSON.stringify({
           platform,
           summary,
+          functions,
+          flows,
+          module_segments: moduleSegments,
+          coverage_dimensions: coverageDimensions,
           clarification_answers: clarificationAnswers,
         }),
       },
@@ -128,6 +161,30 @@ export const createWorkflowApi = (baseUrl: string) => ({
         }),
       },
       '测试用例生成失败',
+    )
+  },
+
+  async generateIntegrationTests(
+    platform: Platform,
+    summary: StructuredSummary,
+    flows: string[],
+    testPoints: TestPoint[],
+    caseTitles: string[],
+  ): Promise<IntegrationTestsResponse> {
+    return requestJson<IntegrationTestsResponse>(
+      `${baseUrl}/api/workflow/integration-tests`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform,
+          summary,
+          flows,
+          reviewed_test_points: testPoints,
+          functional_case_titles: caseTitles,
+        }),
+      },
+      '联动测试生成失败',
     )
   },
 

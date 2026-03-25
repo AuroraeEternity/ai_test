@@ -11,12 +11,11 @@ defineProps<{
 const emit = defineEmits<{
   goHome: []
   newTask: []
-  enterWorkflow: []
   selectRecord: [record: HistoryRecord]
   deleteRecord: [id: string]
 }>()
 
-const historyExpanded = ref(true)
+const historyExpanded = ref(false)
 </script>
 
 <template>
@@ -42,16 +41,11 @@ const historyExpanded = ref(true)
     <div class="sidebar-section">
       <!-- AI 生成测试用例 folder -->
       <div class="sidebar-folder-row">
-        <button class="sidebar-folder-label" :class="{ active: taskActive }" @click="emit('enterWorkflow')">
+        <button class="sidebar-folder-label" :class="{ active: taskActive }" @click="emit('newTask')">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 4h6l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/>
           </svg>
           <span>AI 生成测试用例</span>
-        </button>
-        <button class="folder-icon-btn folder-new-icon" title="新建任务" @click="emit('newTask')">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
         </button>
         <button class="folder-icon-btn" @click="historyExpanded = !historyExpanded">
           <svg :class="{ expanded: historyExpanded }" class="folder-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">

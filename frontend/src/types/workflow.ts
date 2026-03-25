@@ -133,10 +133,20 @@ export interface ClarifyResponse {
   platform: Platform
   summary: StructuredSummary
   clarification_questions: ClarificationQuestion[]
+  is_complete: boolean
   missing_fields: ClarificationGap[]
   resolved_fields: string[]
   remaining_risks: string[]
   round: number
+  prompts: Record<string, string>
+}
+
+export interface AnalyzeStructureResponse {
+  platform: Platform
+  functions: string[]
+  flows: string[]
+  module_segments: Record<string, string>
+  coverage_dimensions: string[]
   prompts: Record<string, string>
 }
 
@@ -161,8 +171,13 @@ export interface ReviewTestPointsResponse {
 export interface GenerateCasesResponse {
   platform: Platform
   cases: TestCase[]
+  validation_issues: ValidationIssue[]
+  prompts: Record<string, string>
+}
+
+export interface IntegrationTestsResponse {
+  platform: Platform
   integration_tests: IntegrationTest[]
-  regression_suites: RegressionSuite[]
   validation_issues: ValidationIssue[]
   prompts: Record<string, string>
 }

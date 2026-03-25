@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
+import { onMounted, onBeforeUnmount, ref, watch, nextTick, computed } from 'vue'
 import MindElixir from 'mind-elixir'
 import 'mind-elixir/style.css'
+import { categoryLabels } from '../types/workflow'
 import type { IntegrationTest, StructuredSummary, TestCase, TestPoint } from '../types/workflow'
 
 interface MindMapNode {
@@ -20,12 +21,97 @@ const props = defineProps<{
 }>()
 
 const containerRef = ref<HTMLElement | null>(null)
-const loading = ref(false)
-const error = ref('')
 const copied = ref(false)
 let meInstance: InstanceType<typeof MindElixir> | null = null
-let cachedRoot: MindMapNode | null = null
-let cachedKey = ''
+
+// 构建测试指引脑图
+// 有用例时：模块 → 分类 → 用例标题 → 首条预期结果（可执行级）
+// 无用例时：模块 → 分类 → 测试点标题 → 描述摘要（设计级）
+const coverageTree = computed<MindMapNode>(() => {
+  const root: MindMapNode = {
+    topic: props.summary.title || '测试覆盖',
+    children: [],
+  }
+
+  const hasCases = props.cases.length > 0
+
+  if (hasCases) {
+    // ── 用例模式：模块 → 分类 → "操作 → 预期结果" ──
+    const modGroups: Record<string, Record<string, typeof props.cases>> = {}
+    for (const c of props.cases) {
+      const mod = c.function_module || '未归类'
+      const cat = c.case_type || 'functional'
+      if (!modGroups[mod]) modGroups[mod] = {}
+      if (!modGroups[mod][cat]) modGroups[mod][cat] = []
+      modGroups[mod][cat].push(c)
+    }
+
+    const caseTypeLabels: Record<string, string> = {
+      functional: '功能验证',
+      boundary: '边界值',
+      exception: '异常处理',
+      permission: '权限控制',
+      platform: '平台专项',
+      integration: '联动测试',
+    }
+
+    for (const [mod, cats] of Object.entries(modGroups)) {
+      const modNode: MindMapNode = { topic: mod, children: [] }
+      for (const [cat, cases] of Object.entries(cats)) {
+        const label = caseTypeLabels[cat] || cat
+        const catNode: MindMapNode = { topic: label, children: [] }
+        for (const c of cases) {
+          catNode.children!.push({
+            topic: c.title,
+            children: c.expected_results.map(r => ({ topic: r })),
+          })
+        }
+        modNode.children!.push(catNode)
+      }
+      root.children!.push(modNode)
+    }
+  } else {
+    // ── 测试点模式：模块 → 分类 → 测试点标题 + 描述摘要 ──
+    const modGroups: Record<string, Record<string, TestPoint[]>> = {}
+    for (const p of props.testPoints) {
+      const mod = p.function_module || '未归类'
+      const cat = p.category
+      if (!modGroups[mod]) modGroups[mod] = {}
+      if (!modGroups[mod][cat]) modGroups[mod][cat] = []
+      modGroups[mod][cat].push(p)
+    }
+
+    for (const [mod, cats] of Object.entries(modGroups)) {
+      const modNode: MindMapNode = { topic: mod, children: [] }
+      for (const [cat, points] of Object.entries(cats)) {
+        const label = categoryLabels[cat as keyof typeof categoryLabels] || cat
+        const catNode: MindMapNode = { topic: label, children: [] }
+        for (const p of points) {
+          const desc = p.description.split(/[。；;]/)[0].trim().slice(0, 50) || p.description.slice(0, 50)
+          catNode.children!.push({
+            topic: p.title,
+            children: desc ? [{ topic: desc }] : [],
+          })
+        }
+        modNode.children!.push(catNode)
+      }
+      root.children!.push(modNode)
+    }
+  }
+
+  // 联动测试
+  if (props.integrationTests.length) {
+    root.children!.push({
+      topic: '流程联动',
+      children: props.integrationTests.map(t => ({
+        topic: t.title,
+        children: t.expected_results.map(r => ({ topic: r })),
+      })),
+    })
+  }
+
+  return root
+})
 
 function nodeToText(node: MindMapNode, depth = 0): string {
   let text = `${'\t'.repeat(depth)}${node.topic}\n`
@@ -36,8 +122,7 @@ function nodeToText(node: MindMapNode, depth = 0): string {
 }
 
 async function copyMindMap() {
-  if (!cachedRoot) return
-  const text = nodeToText(cachedRoot).trimEnd()
+  const text = nodeToText(coverageTree.value).trimEnd()
   try {
     await navigator.clipboard.writeText(text)
     copied.value = true
@@ -56,12 +141,6 @@ async function copyMindMap() {
   }
 }
 
-function buildCacheKey(): string {
-  const caseIds = props.cases.map(c => c.id || '').join(',')
-  const itIds = props.integrationTests.map(t => t.id || '').join(',')
-  return `${props.platform}|${caseIds}|${itIds}`
-}
-
 function convertToMindElixirData(node: MindMapNode, id = 'root', depth = 0): Record<string, unknown> {
   return {
     topic: node.topic,
@@ -74,51 +153,14 @@ function convertToMindElixirData(node: MindMapNode, id = 'root', depth = 0): Rec
   }
 }
 
-async function loadMindMap(forceRefresh = false) {
-  const key = buildCacheKey()
-  if (!forceRefresh && cachedRoot && cachedKey === key) {
-    renderMindMap(cachedRoot)
-    return
-  }
-
-  loading.value = true
-  error.value = ''
-  try {
-    const res = await fetch(`${props.apiBaseUrl}/api/workflow/mindmap`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: props.platform,
-        summary: props.summary,
-        functions: props.functions,
-        test_points: props.testPoints,
-        cases: props.cases,
-        integration_tests: props.integrationTests,
-      }),
-    })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      throw new Error(data.detail || '思维导图生成失败')
-    }
-    const data = await res.json()
-    cachedRoot = data.root
-    cachedKey = key
-    renderMindMap(data.root)
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '思维导图生成失败'
-  } finally {
-    loading.value = false
-  }
-}
-
-function renderMindMap(root: MindMapNode) {
+function renderMindMap() {
   if (!containerRef.value) return
   if (meInstance) {
     meInstance.destroy()
     meInstance = null
   }
 
-  const nodeData = convertToMindElixirData(root)
+  const nodeData = convertToMindElixirData(coverageTree.value)
 
   meInstance = new MindElixir({
     el: containerRef.value,
@@ -133,15 +175,11 @@ function renderMindMap(root: MindMapNode) {
   meInstance.init({ nodeData } as unknown as Parameters<typeof meInstance.init>[0])
 }
 
-onMounted(() => nextTick(loadMindMap))
+onMounted(() => nextTick(renderMindMap))
 
 watch(
-  () => [props.cases, props.integrationTests],
-  () => {
-    cachedRoot = null
-    cachedKey = ''
-    nextTick(loadMindMap)
-  },
+  () => [props.testPoints, props.integrationTests],
+  () => nextTick(renderMindMap),
   { deep: true },
 )
 
@@ -155,16 +193,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="mindmap-wrapper">
-    <div v-if="loading" class="mindmap-loading">
-      <div class="mindmap-spinner"></div>
-      <span>正在生成测试设计思维导图...</span>
+    <div v-if="!props.testPoints.length && !props.cases.length" class="mindmap-empty">
+      暂无测试点或用例数据，无法生成脑图
     </div>
-    <div v-else-if="error" class="mindmap-error">
-      <span>{{ error }}</span>
-      <button class="mindmap-retry" @click="loadMindMap(true)">重试</button>
-    </div>
-    <div v-show="!loading && !error" class="mindmap-content">
-      <button class="mindmap-copy-btn" :class="{ copied }" @click="copyMindMap" :disabled="!cachedRoot" :title="copied ? '已复制' : '复制为文本'">
+    <div v-else class="mindmap-content">
+      <button class="mindmap-copy-btn" :class="{ copied }" @click="copyMindMap" :title="copied ? '已复制' : '复制为文本'">
         <svg v-if="!copied" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
         <svg v-else width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
         {{ copied ? '已复制' : '复制' }}
@@ -175,6 +208,14 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.mindmap-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-faint, #94a3b8);
+  font-size: 14px;
+}
 .mindmap-wrapper {
   width: 100%;
   min-height: 500px;
@@ -187,49 +228,6 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   overflow: hidden;
   background: #FAFBFC;
-}
-.mindmap-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  height: 400px;
-  color: #64748B;
-  font-size: 14px;
-}
-.mindmap-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid #E2E8F0;
-  border-top-color: #4F46E5;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-.mindmap-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  height: 400px;
-  color: #EF4444;
-  font-size: 14px;
-}
-.mindmap-retry {
-  padding: 6px 16px;
-  border: 1px solid #E2E8F0;
-  border-radius: 6px;
-  background: white;
-  color: #4F46E5;
-  font-size: 13px;
-  cursor: pointer;
-}
-.mindmap-retry:hover {
-  background: #EEF2FF;
 }
 .mindmap-content {
   position: relative;
@@ -261,9 +259,5 @@ onBeforeUnmount(() => {
   background: #F0FDF4;
   color: #16A34A;
   border-color: #BBF7D0;
-}
-.mindmap-copy-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 </style>

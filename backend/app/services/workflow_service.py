@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import Counter
@@ -7,6 +8,9 @@ from typing import Any
 
 from ..config import get_settings
 from ..models import (
+    AnalyzeStructureLLMOutput,
+    AnalyzeStructureRequest,
+    AnalyzeStructureResponse,
     ClarificationGap,
     ClarificationQuestion,
     ClarifyLLMOutput,
@@ -23,24 +27,23 @@ from ..models import (
     IntegrationTestsRequest,
     IntegrationTestsResponse,
     MetaResponse,
-    MindMapLLMOutput,
-    MindMapRequest,
-    MindMapResponse,
     PlatformOption,
     PlatformType,
     Priority,
     ProjectOption,
-    RegressionSuite,
     ReviewTestPointsLLMOutput,
     ReviewNote,
     ReviewTestPointsRequest,
     ReviewTestPointsResponse,
     RiskLevel,
+    StructuredSummary,
     TestCase,
     TestPoint,
     ValidationIssue,
 )
 from ..prompts import (
+    build_analyze_structure_system_prompt,
+    build_analyze_structure_user_prompt,
     build_case_system_prompt,
     build_case_user_prompt,
     build_clarify_system_prompt,
@@ -49,8 +52,6 @@ from ..prompts import (
     build_generate_test_points_user_prompt,
     build_integration_system_prompt,
     build_integration_user_prompt,
-    build_mindmap_system_prompt,
-    build_mindmap_user_prompt,
     build_review_system_prompt,
     build_review_user_prompt,
 )
@@ -99,8 +100,7 @@ class WorkflowService:
             required_field="summary",
         )
 
-        # 用已回答问题的数量推算当前是第几轮澄清（去重防止重复计算同一问题）
-        round_num = len({answer.question_id for answer in payload.clarification_answers}) + 1
+        round_num = 1 if not payload.clarification_answers else 2
 
         logger.info(
             "clarify 完成 | round=%d 澄清问题数=%d",
@@ -108,13 +108,19 @@ class WorkflowService:
             len(result.clarification_questions),
         )
 
+        # 缺口分析由后端逻辑计算，不依赖 LLM 额外输出
+        missing_fields = self._compute_missing_fields(result.summary)
+        resolved_fields = self._compute_resolved_fields(result.summary)
+        remaining_risks = self._compute_remaining_risks(result.summary, result.clarification_questions)
+
         return ClarifyResponse(
             platform=payload.platform,
             summary=result.summary,
             clarification_questions=result.clarification_questions,
-            missing_fields=result.missing_fields,
-            resolved_fields=result.resolved_fields,
-            remaining_risks=result.remaining_risks,
+            is_complete=result.is_complete,
+            missing_fields=missing_fields,
+            resolved_fields=resolved_fields,
+            remaining_risks=remaining_risks,
             round=round_num,
             prompts={
                 "clarify_system_prompt": system_prompt,
@@ -123,29 +129,71 @@ class WorkflowService:
         )
 
     # ------------------------------------------------------------------ #
-    # Step 2 — 测试点生成
+    # Step 2a — 测试结构分析
+    # ------------------------------------------------------------------ #
+
+    async def analyze_structure(self, payload: AnalyzeStructureRequest) -> AnalyzeStructureResponse:
+        """
+        从已确认摘要中提取测试设计的结构框架：功能模块、业务流、模块描述、覆盖维度。
+
+        这一步的输出需要 QA 确认后，才进入测试点生成。
+        用户可以在前端编辑模块拆分、增删业务流，确保结构合理。
+
+        temperature=0.2：结构分析需要较高确定性，但允许一定的灵活度来识别模块。
+        """
+        logger.info(
+            "analyze_structure 开始 | platform=%s 摘要标题=%s",
+            payload.platform.value,
+            payload.summary.title,
+        )
+        self._ensure_blocking_questions_answered(payload.clarification_questions, payload.clarification_answers)
+
+        system_prompt = build_analyze_structure_system_prompt()
+        user_prompt = build_analyze_structure_user_prompt(payload)
+        result = await self._run_llm(
+            schema=AnalyzeStructureLLMOutput,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.2,
+            required_field="functions",
+        )
+
+        logger.info(
+            "analyze_structure 完成 | 功能模块数=%d 业务流数=%d",
+            len(result.functions),
+            len(result.flows),
+        )
+
+        return AnalyzeStructureResponse(
+            platform=payload.platform,
+            functions=result.functions,
+            flows=result.flows,
+            module_segments=result.module_segments,
+            coverage_dimensions=result.coverage_dimensions,
+            prompts={
+                "structure_system_prompt": system_prompt,
+                "structure_user_prompt": user_prompt,
+            },
+        )
+
+    # ------------------------------------------------------------------ #
+    # Step 2b — 测试点生成
     # ------------------------------------------------------------------ #
 
     async def generate_test_points(self, payload: GenerateTestPointsRequest) -> GenerateTestPointsResponse:
         """
-        基于已经人工确认的需求摘要，生成测试设计初稿。
+        基于用户已确认的功能模块结构和需求摘要，生成测试点列表。
 
-        输出包含：
-        - functions：识别出的功能模块列表
-        - flows：业务流名称列表（供后续联动测试使用）
-        - module_segments：每个模块对应的需求片段描述
-        - coverage_dimensions：覆盖维度说明
-        - test_points：测试点列表（经过标准化处理）
+        前置条件：用户已通过 analyze_structure 获取并确认了 functions / flows 等结构信息。
 
         temperature=0.35：测试点生成需要一定的发散性以覆盖边界场景，
         但不能太高避免生成无关内容。
         """
         logger.info(
-            "generate_test_points 开始 | platform=%s 摘要标题=%s",
+            "generate_test_points 开始 | platform=%s 功能模块数=%d",
             payload.platform.value,
-            payload.summary.title,
+            len(payload.functions),
         )
-        self._ensure_blocking_questions_answered(payload.clarification_questions, payload.clarification_answers)
 
         system_prompt = build_generate_test_points_system_prompt()
         user_prompt = build_generate_test_points_user_prompt(payload)
@@ -158,21 +206,19 @@ class WorkflowService:
         )
 
         # 标准化：补全缺失的 id、function_module，修正优先级与风险等级不一致的情况
-        test_points = self._normalize_test_points(result.test_points, result.functions)
+        test_points = self._normalize_test_points(result.test_points, payload.functions)
 
         logger.info(
-            "generate_test_points 完成 | 功能模块数=%d 业务流数=%d 测试点数=%d",
-            len(result.functions),
-            len(result.flows),
+            "generate_test_points 完成 | 测试点数=%d",
             len(test_points),
         )
 
         return GenerateTestPointsResponse(
             platform=payload.platform,
-            functions=result.functions,
-            flows=result.flows,
-            module_segments=result.module_segments,
-            coverage_dimensions=result.coverage_dimensions,
+            functions=payload.functions,
+            flows=payload.flows,
+            module_segments=payload.module_segments,
+            coverage_dimensions=payload.coverage_dimensions,
             test_points=test_points,
             prompts={
                 "test_points_system_prompt": system_prompt,
@@ -234,15 +280,15 @@ class WorkflowService:
         )
 
     # ------------------------------------------------------------------ #
-    # Step 4 — 用例生成（含联动测试和回归集）
+    # Step 4 — 用例生成（含回归集）
     # ------------------------------------------------------------------ #
 
     async def generate_cases(self, payload: GenerateCasesRequest) -> GenerateCasesResponse:
         """
-        基于人工筛选后的测试点，生成三类测试资产：
-        1. cases：功能测试用例，每条用例严格对应一个 source_test_point_id
-        2. integration_tests：跨模块联动测试场景（仅在 flows 不为空时生成）
-        3. regression_suites：按优先级和风险等级自动分级的回归测试集
+        基于人工筛选后的测试点，生成功能测试用例和回归测试集。
+
+        联动测试不再在此方法中生成，改由前端单独触发 generate_integration_tests。
+        回归集为纯规则计算（不走 LLM），基于用例优先级和测试点风险等级自动分级。
 
         同时执行两阶段质量校验：
         - normalize 阶段：补全缺失字段、修正优先级继承
@@ -251,10 +297,9 @@ class WorkflowService:
         temperature=0.2：用例生成要求格式规范、内容确定，温度不宜过高。
         """
         logger.info(
-            "generate_cases 开始 | platform=%s 选中测试点数=%d flows数=%d",
+            "generate_cases 开始 | platform=%s 选中测试点数=%d",
             payload.platform.value,
             len(payload.selected_test_points),
-            len(payload.flows),
         )
         if not payload.selected_test_points:
             raise WorkflowValidationError("至少需要选择 1 个测试点后才能生成测试用例。")
@@ -263,9 +308,10 @@ class WorkflowService:
 
         system_prompt = build_case_system_prompt()
         grouped_points = self._group_test_points_by_module(payload.selected_test_points)
-        raw_cases: list[TestCase] = []
         prompt_bundle: dict[str, str] = {"case_system_prompt": system_prompt}
-        for module_name, points in grouped_points.items():
+
+        # 按模块并行调用 LLM，减少总延迟
+        async def _generate_for_module(module_name: str, points: list[TestPoint]) -> list[TestCase]:
             module_payload = GenerateCasesRequest(
                 platform=payload.platform,
                 summary=payload.summary,
@@ -282,8 +328,13 @@ class WorkflowService:
                 temperature=0.2,
                 required_field="cases",
             )
-            raw_cases.extend(llm_output.cases)
             prompt_bundle[f"case_user_prompt::{module_name}"] = user_prompt
+            return llm_output.cases
+
+        module_results = await asyncio.gather(
+            *[_generate_for_module(name, pts) for name, pts in grouped_points.items()]
+        )
+        raw_cases: list[TestCase] = [case for batch in module_results for case in batch]
 
         # normalize：补全 id、platform、function_module，继承测试点的 P0 优先级
         cases, normalize_issues = self._normalize_cases(payload, raw_cases)
@@ -304,45 +355,13 @@ class WorkflowService:
                 sum(1 for i in validation_issues if i.severity == RiskLevel.LOW),
             )
 
-        # 联动测试：只有当存在业务流时才生成，避免无意义的空调用
-        integration_tests: list[IntegrationTest] = []
-        integration_prompts: dict[str, str] = {}
-        if payload.flows:
-            logger.info("检测到 flows，开始生成联动测试")
-            integration_payload = IntegrationTestsRequest(
-                platform=payload.platform,
-                summary=payload.summary,
-                flows=payload.flows,
-                reviewed_test_points=payload.selected_test_points,
-                functional_case_titles=[item.title for item in cases],
-            )
-            integration_response = await self.generate_integration_tests(integration_payload)
-            integration_tests = integration_response.integration_tests
-            integration_prompts = integration_response.prompts
-            validation_issues.extend(integration_response.validation_issues)
-        else:
-            logger.info("未检测到 flows，跳过联动测试生成")
-
-        # 基于用例优先级和测试点风险等级，自动构建四个分级回归集
-        regression_suites = self._build_regression_suites(cases, payload.selected_test_points, integration_tests)
-
-        logger.info(
-            "generate_cases 全部完成 | 用例数=%d 联动测试数=%d 回归集数=%d",
-            len(cases),
-            len(integration_tests),
-            len(regression_suites),
-        )
+        logger.info("generate_cases 全部完成 | 用例数=%d", len(cases))
 
         return GenerateCasesResponse(
             platform=payload.platform,
             cases=cases,
-            integration_tests=integration_tests,
-            regression_suites=regression_suites,
             validation_issues=validation_issues,
-            prompts={
-                **prompt_bundle,
-                **integration_prompts,
-            },
+            prompts=prompt_bundle,
         )
 
     # ------------------------------------------------------------------ #
@@ -393,42 +412,6 @@ class WorkflowService:
     # 脑图生成
     # ------------------------------------------------------------------ #
 
-    async def generate_mindmap(self, payload: MindMapRequest) -> MindMapResponse:
-        """
-        基于测试设计结果生成脑图数据结构。
-
-        脑图按「功能模块 -> 测试维度 -> 测试点」三层组织，
-        不作为主流程的强制门控，仅供可视化浏览使用。
-
-        temperature=0.1：脑图结构要求稳定，减少随机性。
-        """
-        logger.info(
-            "generate_mindmap 开始 | platform=%s 测试点数=%d 用例数=%d",
-            payload.platform.value,
-            len(payload.test_points),
-            len(payload.cases),
-        )
-
-        system_prompt = build_mindmap_system_prompt()
-        user_prompt = build_mindmap_user_prompt(payload)
-        result = await self._run_llm(
-            schema=MindMapLLMOutput,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.1,
-            required_field="root",
-        )
-
-        logger.info("generate_mindmap 完成 | 根节点=%s", result.root.topic)
-
-        return MindMapResponse(
-            root=result.root,
-            prompts={
-                "mindmap_system_prompt": system_prompt,
-                "mindmap_user_prompt": user_prompt,
-            },
-        )
-
     # ------------------------------------------------------------------ #
     # 元数据
     # ------------------------------------------------------------------ #
@@ -458,13 +441,106 @@ class WorkflowService:
                 "需求输入",
                 "摘要确认",
                 "测试设计",
-                "测试点评审",
                 "用例与回归资产",
             ],
         )
 
     # ------------------------------------------------------------------ #
     # 内部工具方法
+    # ------------------------------------------------------------------ #
+
+    # ── 缺口分析（后端计算，不依赖 LLM） ──
+
+    _SUMMARY_FIELD_LABELS: dict[str, str] = {
+        "title": "功能标题",
+        "business_goal": "业务目标",
+        "actors": "参与角色",
+        "preconditions": "前置条件",
+        "main_flow": "主流程",
+        "exception_flows": "异常流程",
+        "business_rules": "业务规则",
+        "platform_focus": "平台关注点",
+    }
+
+    # 各字段的质量阈值
+    _FIELD_MIN_COUNTS: dict[str, int] = {
+        "main_flow": 4,
+        "exception_flows": 2,
+        "business_rules": 2,
+        "actors": 2,
+        "preconditions": 1,
+        "platform_focus": 1,
+    }
+
+    def _compute_missing_fields(self, summary: StructuredSummary) -> list[ClarificationGap]:
+        """检查摘要中各字段的质量，而非仅检查是否为空。"""
+        gaps: list[ClarificationGap] = []
+        for field, label in self._SUMMARY_FIELD_LABELS.items():
+            value = getattr(summary, field, None)
+
+            # 完全为空
+            if not value or value in ("", []):
+                gaps.append(ClarificationGap(field=field, detail=f"{label}为空，缺少相关信息"))
+                continue
+
+            # 含"待确认"标记
+            if isinstance(value, str) and "待确认" in value:
+                gaps.append(ClarificationGap(field=field, detail=f"{label}中包含待确认内容", severity=RiskLevel.LOW))
+            elif isinstance(value, list):
+                pending_items = [item for item in value if isinstance(item, str) and "待确认" in item]
+                if pending_items:
+                    gaps.append(ClarificationGap(
+                        field=field,
+                        detail=f"{label}中有 {len(pending_items)} 条待确认内容",
+                        severity=RiskLevel.LOW,
+                    ))
+
+                # 数量不足
+                min_count = self._FIELD_MIN_COUNTS.get(field, 0)
+                if min_count and len(value) < min_count:
+                    gaps.append(ClarificationGap(
+                        field=field,
+                        detail=f"{label}仅有 {len(value)} 条，建议至少 {min_count} 条以确保覆盖",
+                        severity=RiskLevel.LOW,
+                    ))
+
+        return gaps
+
+    def _compute_resolved_fields(self, summary: StructuredSummary) -> list[str]:
+        """检查摘要中哪些字段已达到质量标准。"""
+        resolved: list[str] = []
+        for field in self._SUMMARY_FIELD_LABELS:
+            value = getattr(summary, field, None)
+            if not value:
+                continue
+            min_count = self._FIELD_MIN_COUNTS.get(field, 0)
+            if isinstance(value, str):
+                if value.strip() and "待确认" not in value:
+                    resolved.append(field)
+            elif isinstance(value, list):
+                has_pending = any(isinstance(item, str) and "待确认" in item for item in value)
+                meets_count = len(value) >= min_count if min_count else bool(value)
+                if not has_pending and meets_count:
+                    resolved.append(field)
+        return resolved
+
+    def _compute_remaining_risks(
+        self, summary: StructuredSummary, questions: list[ClarificationQuestion]
+    ) -> list[str]:
+        """根据摘要质量和阻塞性问题推断残余风险。"""
+        risks: list[str] = []
+        if len(summary.main_flow) < 4:
+            risks.append(f"主流程仅 {len(summary.main_flow)} 步，可能不够具体，测试覆盖存在遗漏风险")
+        if len(summary.business_rules) < 2:
+            risks.append("业务规则不足，边界和校验类测试点可能不完整")
+        if len(summary.actors) < 2:
+            risks.append("角色信息不足，权限类测试点可能遗漏")
+        if len(summary.exception_flows) < 2:
+            risks.append("异常流程不足，异常处理类测试点可能遗漏")
+        blocking_count = sum(1 for q in questions if q.blocking)
+        if blocking_count > 0:
+            risks.append(f"仍有 {blocking_count} 个阻塞性问题未回答")
+        return risks
     # ------------------------------------------------------------------ #
 
     async def _run_llm(
@@ -864,94 +940,4 @@ class WorkflowService:
     def _normalize_text(self, value: str) -> str:
         return re.sub(r"[\s\-_:：，,。/]+", "", value.lower())
 
-    def _build_regression_suites(
-        self,
-        cases: list[TestCase],
-        selected_test_points: list[TestPoint],
-        integration_tests: list[IntegrationTest],
-    ) -> list[RegressionSuite]:
-        """
-        基于用例优先级和测试点风险等级，自动构建四个分级回归集：
-        - RS-SMOKE：P0 用例 + 高风险测试点对应用例，用于快速主链路验证
-        - RS-CORE：P0/P1 用例 + 全部联动测试，用于常规版本回归
-        - RS-HIGH-RISK：高风险测试点对应用例，用于专项回归
-        - RS-FULL：全量用例 + 全部联动测试，用于完整回归
 
-        所有 case_ids 经过去重和空值过滤处理。
-        """
-        # 构建测试点 id -> 测试点 的快速查找表，用于判断用例对应的风险等级
-        point_map = {item.id: item for item in selected_test_points}
-
-        smoke_case_ids = [
-            case.id
-            for case in cases
-            if case.priority == Priority.P0
-            or (
-                point_map.get(case.source_test_point_id)
-                and point_map[case.source_test_point_id].risk_level == RiskLevel.HIGH
-            )
-        ]
-        core_case_ids = [case.id for case in cases if case.priority in {Priority.P0, Priority.P1}]
-        high_risk_case_ids = [
-            case.id
-            for case in cases
-            if point_map.get(case.source_test_point_id)
-            and point_map[case.source_test_point_id].risk_level == RiskLevel.HIGH
-        ]
-        full_case_ids = [case.id for case in cases]
-        integration_ids = [item.id for item in integration_tests]
-
-        def unique(values: list[str]) -> list[str]:
-            """去重并过滤空字符串，同时保持原有顺序。"""
-            seen: set[str] = set()
-            result: list[str] = []
-            for value in values:
-                if value and value not in seen:
-                    seen.add(value)
-                    result.append(value)
-            return result
-
-        logger.debug(
-            "_build_regression_suites | smoke=%d core=%d high_risk=%d full=%d integration=%d",
-            len(unique(smoke_case_ids)),
-            len(unique(core_case_ids)),
-            len(unique(high_risk_case_ids)),
-            len(full_case_ids),
-            len(integration_ids),
-        )
-
-        return [
-            RegressionSuite(
-                id="RS-SMOKE",
-                title="冒烟回归集",
-                description="聚焦核心主流程和高风险测试点，适合快速验证主链路。",
-                case_ids=unique(smoke_case_ids),
-                # 冒烟集只取前两个联动测试，保持执行时间可控
-                integration_test_ids=integration_ids[:2],
-                entry_criteria=["需求已确认", "主流程相关数据已准备"],
-            ),
-            RegressionSuite(
-                id="RS-CORE",
-                title="核心流程回归集",
-                description="覆盖 P0/P1 重点流程，适合版本提测后的常规回归。",
-                case_ids=unique(core_case_ids),
-                integration_test_ids=integration_ids,
-                entry_criteria=["关键模块可用", "基础环境稳定"],
-            ),
-            RegressionSuite(
-                id="RS-HIGH-RISK",
-                title="高风险专项回归集",
-                description="聚焦高风险测试点和关键联动场景。",
-                case_ids=unique(high_risk_case_ids),
-                integration_test_ids=integration_ids,
-                entry_criteria=["高风险需求已完成联调"],
-            ),
-            RegressionSuite(
-                id="RS-FULL",
-                title="全量回归集",
-                description="包含当前任务的全部功能和联动测试资产。",
-                case_ids=unique(full_case_ids),
-                integration_test_ids=integration_ids,
-                entry_criteria=["完整测试环境可用"],
-            ),
-        ]
