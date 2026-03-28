@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import CaseSuiteStep from './components/CaseSuiteStep.vue'
-import HistorySidebar from './components/HistorySidebar.vue'
-import RequirementInputStep from './components/RequirementInputStep.vue'
-import SummaryConfirmStep from './components/SummaryConfirmStep.vue'
-import TestDesignStep from './components/TestDesignStep.vue'
-import { createWorkflowApi, splitLines } from './lib/api'
+import CaseSuiteStep from './modules/ai-cases/views/CaseSuiteStep.vue'
+import HistorySidebar from './modules/ai-cases/components/HistorySidebar.vue'
+import RequirementInputStep from './modules/ai-cases/views/RequirementInputStep.vue'
+import SummaryConfirmStep from './modules/ai-cases/views/SummaryConfirmStep.vue'
+import TestDesignStep from './modules/ai-cases/views/TestDesignStep.vue'
+import DataSearch from './modules/bq-query/views/DataSearch.vue'
+import AgentChat from './modules/bq-query/views/AgentChat.vue'
+import { createWorkflowApi, splitLines } from './modules/ai-cases/api'
+import { createBqApi } from './modules/bq-query/api'
 import type {
   ClarificationAnswer,
   ClarifyResponse,
@@ -19,10 +22,11 @@ import type {
   StructuredSummary,
   TaskFormState,
   TestPoint,
-} from './types/workflow'
+} from './modules/ai-cases/types'
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 const api = createWorkflowApi(apiBaseUrl)
+const bqApi = createBqApi(apiBaseUrl)
 
 const fallbackMeta: MetaResponse = {
   platforms: [
@@ -48,6 +52,11 @@ const currentStep = ref(1)
 const historyRecords = ref<HistoryRecord[]>([])
 const activeHistoryId = ref<string | null>(null)
 const taskActive = ref(false)
+const activeModule = ref<'home' | 'ai-cases' | 'bq-query'>('home')
+const moduleView = ref<'intro' | 'workspace'>('intro')
+const bqTab = ref<'search' | 'agent'>('search')
+const bqSources = ref<{ key: string; label: string }[]>([])
+const bqSourceKey = ref('')
 
 const form = reactive<TaskFormState>({
   platform: 'web',
@@ -111,6 +120,8 @@ const resetWorkflowState = () => {
 
 const startNewTask = () => {
   taskActive.value = true
+  activeModule.value = 'ai-cases'
+  moduleView.value = 'workspace'
   activeHistoryId.value = null
   form.requirementText = ''
   form.actors = ''
@@ -122,7 +133,34 @@ const startNewTask = () => {
 
 const goHome = () => {
   taskActive.value = false
+  activeModule.value = 'home'
+  moduleView.value = 'intro'
   errorMessage.value = ''
+}
+
+const switchModule = (mod: string) => {
+  activeModule.value = mod as 'ai-cases' | 'bq-query'
+  moduleView.value = 'intro'
+  taskActive.value = false
+}
+
+const enterBqWorkspace = async () => {
+  activeModule.value = 'bq-query'
+  moduleView.value = 'workspace'
+  if (!bqSources.value.length) {
+    try {
+      bqSources.value = await bqApi.getSources()
+      if (bqSources.value.length && !bqSourceKey.value) {
+        bqSourceKey.value = bqSources.value[0].key
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+const enterAiCasesIntro = () => {
+  activeModule.value = 'ai-cases'
+  moduleView.value = 'intro'
+  taskActive.value = false
 }
 
 const collectClarificationAnswers = (): ClarificationAnswer[] =>
@@ -397,6 +435,8 @@ const loadHistory = async () => {
 
 const loadHistoryRecord = (record: HistoryRecord) => {
   taskActive.value = true
+  activeModule.value = 'ai-cases'
+  moduleView.value = 'workspace'
   activeHistoryId.value = record.id
   form.platform = record.platform
   form.project = record.project
@@ -492,14 +532,17 @@ onMounted(async () => {
       :records="historyRecords"
       :active-id="activeHistoryId"
       :task-active="taskActive"
+      :active-module="activeModule"
       @go-home="goHome"
       @new-task="startNewTask"
       @select-record="loadHistoryRecord"
       @delete-record="deleteHistoryRecord"
+      @switch-module="switchModule"
+      @enter-ai-intro="enterAiCasesIntro"
     />
 
     <main class="app-main">
-      <div v-if="!taskActive" class="welcome-page">
+      <div v-if="activeModule === 'home' && !taskActive" class="welcome-page">
         <div class="welcome-content">
 
           <!-- Hero -->
@@ -512,35 +555,9 @@ onMounted(async () => {
             </div>
             <h1 class="welcome-title">AI Test</h1>
             <p class="welcome-desc">
-              面向测试工程师的 AI 原生工具平台。<br>
-              从需求到可交付的测试资产，最快几分钟完成。
+              面向测试工程师的 AI 原生工具平台<br>
+              测试设计、数据校验、自动化执行
             </p>
-            <button class="btn btn-primary welcome-cta" @click="startNewTask">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-              </svg>
-              新建测试任务
-            </button>
-          </div>
-
-          <!-- 4-step flow -->
-          <div class="welcome-section">
-            <div class="welcome-section-label">工作流程</div>
-            <div class="welcome-steps">
-              <div class="welcome-step" v-for="(step, idx) in [
-                { title: '需求输入', desc: '粘贴需求文本或上传 PDF，补充角色与业务规则' },
-                { title: '摘要确认', desc: 'AI 提取结构化摘要，识别澄清问题，人工确认后进入设计' },
-                { title: '测试设计', desc: '按模块生成测试点，支持 AI 评审、手动编辑，选择进入用例' },
-                { title: '用例生成', desc: '生成功能用例与联动测试，导出可直接使用的测试资产' },
-              ]" :key="idx">
-                <div class="welcome-step-header">
-                  <div class="welcome-step-num">{{ idx + 1 }}</div>
-                  <div v-if="idx < 3" class="welcome-step-line"></div>
-                </div>
-                <div class="welcome-step-title">{{ step.title }}</div>
-                <div class="welcome-step-desc">{{ step.desc }}</div>
-              </div>
-            </div>
           </div>
 
           <!-- Module Cards -->
@@ -562,6 +579,29 @@ onMounted(async () => {
                 </div>
                 <div class="module-card-title">AI 生成测试用例</div>
                 <div class="module-card-desc">需求澄清 → 测试点设计 → 用例生成全流程</div>
+                <div class="module-card-action">
+                  开始使用
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </div>
+              </div>
+
+              <div class="module-card module-card--active" @click="switchModule('bq-query')">
+                <div class="module-card-header">
+                  <div class="module-card-icon" style="background: #FFF7ED;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                    </svg>
+                  </div>
+                  <span class="module-status module-status--live">可用</span>
+                </div>
+                <div class="module-card-title">BQ 数据查询</div>
+                <div class="module-card-desc">资源类型筛选 · 用户查询 · AI 智能查询</div>
+                <div class="module-card-action">
+                  开始使用
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </div>
               </div>
 
               <div class="module-card module-card--soon">
@@ -573,23 +613,8 @@ onMounted(async () => {
                   </div>
                   <span class="module-status module-status--soon">规划中</span>
                 </div>
-                <div class="module-card-title">Android 埋点测试</div>
-                <div class="module-card-desc">ADB 命令接入，AI 自动验证埋点数据上报</div>
-              </div>
-
-              <div class="module-card module-card--soon">
-                <div class="module-card-header">
-                  <div class="module-card-icon" style="background: #FFF7ED;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <ellipse cx="12" cy="5" rx="9" ry="3"/>
-                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-                    </svg>
-                  </div>
-                  <span class="module-status module-status--soon">规划中</span>
-                </div>
-                <div class="module-card-title">BigQuery 数据校验</div>
-                <div class="module-card-desc">自动比对测试前后数据变化，AI 驱动数据层验证</div>
+                <div class="module-card-title">Android 测试工具</div>
+                <div class="module-card-desc">设备管理 · 埋点验证 · 性能监控</div>
               </div>
 
             </div>
@@ -597,6 +622,124 @@ onMounted(async () => {
 
         </div>
       </div>
+      <!-- AI 测试用例 intro -->
+      <div v-else-if="activeModule === 'ai-cases' && moduleView === 'intro'" class="module-intro-page">
+        <div class="module-intro-content">
+          <div class="module-intro-icon" style="background: #EEF2FF;">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
+          <h1 class="module-intro-title">AI 生成测试用例</h1>
+          <p class="module-intro-desc">从需求文本一键生成结构化测试用例，覆盖需求澄清、测试点设计、用例生成全流程。</p>
+
+          <div class="module-intro-steps">
+            <div class="module-intro-step" v-for="(step, idx) in [
+              { num: '1', title: '需求输入', desc: '粘贴需求文本或上传 PDF，补充角色与业务规则' },
+              { num: '2', title: '摘要确认', desc: 'AI 提取结构化摘要，识别澄清问题，人工确认' },
+              { num: '3', title: '测试设计', desc: '按模块生成测试点，支持 AI 评审、手动编辑' },
+              { num: '4', title: '用例生成', desc: '生成功能用例与联动测试，导出测试资产' },
+            ]" :key="idx">
+              <div class="module-intro-step-num">{{ step.num }}</div>
+              <div>
+                <div class="module-intro-step-title">{{ step.title }}</div>
+                <div class="module-intro-step-desc">{{ step.desc }}</div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary module-intro-cta" @click="startNewTask">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            新建测试任务
+          </button>
+        </div>
+      </div>
+
+      <!-- BQ 数据查询 intro -->
+      <div v-else-if="activeModule === 'bq-query' && moduleView === 'intro'" class="module-intro-page">
+        <div class="module-intro-content">
+          <div class="module-intro-icon" style="background: #FFF7ED;">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+          </div>
+          <h1 class="module-intro-title">BQ 数据查询</h1>
+          <p class="module-intro-desc">查询 BigQuery 中的用户资源数据，支持按资源类型筛选、UID 查询和 AI 自然语言查询。</p>
+
+          <div class="module-intro-features">
+            <div class="module-intro-feature">
+              <div class="module-intro-feature-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+              </div>
+              <div>
+                <div class="module-intro-feature-title">资源类型筛选</div>
+                <div class="module-intro-feature-desc">按 PDF / PPT / WORD / TXT 等资源类型快速过滤 Flashcards 资源</div>
+              </div>
+            </div>
+            <div class="module-intro-feature">
+              <div class="module-intro-feature-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                </svg>
+              </div>
+              <div>
+                <div class="module-intro-feature-title">用户 ID 查询</div>
+                <div class="module-intro-feature-desc">通过 uid 精确查看指定用户上传的所有资源及状态</div>
+              </div>
+            </div>
+            <div class="module-intro-feature">
+              <div class="module-intro-feature-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              </div>
+              <div>
+                <div class="module-intro-feature-title">AI 智能查询</div>
+                <div class="module-intro-feature-desc">用自然语言描述查询需求，Gemini Agent 自动生成 SQL 返回结果</div>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-primary module-intro-cta" @click="enterBqWorkspace">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+            </svg>
+            开始查询
+          </button>
+        </div>
+      </div>
+
+      <!-- BQ 数据查询工作区 -->
+      <div v-else-if="activeModule === 'bq-query' && moduleView === 'workspace'" class="bq-module-layout">
+        <div class="bq-module-toolbar">
+          <div class="bq-source-tabs">
+            <button
+              v-for="src in bqSources"
+              :key="src.key"
+              class="bq-source-tab"
+              :class="{ active: bqSourceKey === src.key }"
+              @click="bqSourceKey = src.key"
+            >{{ src.label }}</button>
+          </div>
+          <div class="bq-module-tabs">
+            <button class="btn btn-ghost" :class="{ active: bqTab === 'search' }" @click="bqTab = 'search'">数据查询</button>
+            <button class="btn btn-ghost" :class="{ active: bqTab === 'agent' }" @click="bqTab = 'agent'">AI 智能查询</button>
+          </div>
+        </div>
+        <DataSearch v-if="bqTab === 'search'" :api-base-url="apiBaseUrl" :source-key="bqSourceKey" />
+        <AgentChat v-else :api-base-url="apiBaseUrl" :source-key="bqSourceKey" />
+      </div>
+
+      <!-- AI 测试用例工作流 -->
       <div v-else class="workbench-layout">
         <div class="step-progress">
           <div
@@ -628,6 +771,7 @@ onMounted(async () => {
           :loading="clarifying || loadingMeta"
           :uploading-pdf="uploadingPdf"
           :pdf-file-name="pdfFileName"
+          :api-base-url="apiBaseUrl"
           @submit="startClarify"
           @upload-pdf="handlePdfUpload"
         />

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { MetaResponse, TaskFormState } from '../types/workflow'
+import type { MetaResponse, TaskFormState } from '../types'
+import { createWorkflowApi } from '../api'
 
 const props = defineProps<{
   form: TaskFormState
@@ -8,6 +9,7 @@ const props = defineProps<{
   loading: boolean
   uploadingPdf: boolean
   pdfFileName: string
+  apiBaseUrl: string
 }>()
 
 const emit = defineEmits<{
@@ -15,7 +17,14 @@ const emit = defineEmits<{
   uploadPdf: [file: File]
 }>()
 
+const api = createWorkflowApi(props.apiBaseUrl)
 const showAdvanced = ref(false)
+const showFeishuInput = ref(false)
+const feishuUrl = ref('')
+const feishuLoading = ref(false)
+const feishuError = ref('')
+const feishuHtml = ref('')
+const feishuTitle = ref('')
 
 const onFileChange = (event: Event) => {
   const input = event.target as HTMLInputElement
@@ -28,7 +37,55 @@ const clearPdf = () => {
   props.form.requirementText = ''
 }
 
+const clearFeishu = () => {
+  feishuHtml.value = ''
+  feishuTitle.value = ''
+  feishuUrl.value = ''
+  props.form.requirementText = ''
+}
+
 const canSubmit = () => props.form.requirementText.trim().length > 0 && !props.loading
+
+const importFeishuDoc = async () => {
+  const url = feishuUrl.value.trim()
+  if (!url) return
+  feishuLoading.value = true
+  feishuError.value = ''
+  try {
+    // 检查是否已授权
+    let authInfo = await api.feishuAuthUrl()
+    if (!authInfo.authorized) {
+      // 弹窗跳飞书授权，回调直接打到后端，后端换完 token 后弹窗自动关闭
+      const authWindow = window.open(authInfo.url, 'feishu_auth', 'width=600,height=700')
+      // 轮询等待授权完成
+      await new Promise<void>((resolve, reject) => {
+        const timer = setInterval(async () => {
+          if (authWindow?.closed) {
+            clearInterval(timer)
+            // 弹窗关了，检查是否授权成功
+            const check = await api.feishuAuthUrl()
+            if (check.authorized) {
+              resolve()
+            } else {
+              reject(new Error('飞书授权未完成，请重试'))
+            }
+          }
+        }, 1000)
+        setTimeout(() => { clearInterval(timer); reject(new Error('授权超时')) }, 120000)
+      })
+    }
+    // 获取文档
+    const result = await api.feishuFetchDoc(url)
+    feishuHtml.value = result.html
+    feishuTitle.value = result.title
+    props.form.requirementText = result.text
+    showFeishuInput.value = false
+  } catch (e) {
+    feishuError.value = e instanceof Error ? e.message : '获取文档失败'
+  } finally {
+    feishuLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -77,6 +134,13 @@ const canSubmit = () => props.form.requirementText.trim().length > 0 && !props.l
           </svg>
           {{ uploadingPdf ? '解析 PDF 中…' : '上传 PDF' }}
         </label>
+        <button class="ri-feishu-btn" @click="showFeishuInput = !showFeishuInput" :disabled="feishuLoading">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          导入飞书文档
+        </button>
       </div>
 
       <div v-if="pdfFileName" class="ri-pdf-tag">
@@ -86,6 +150,37 @@ const canSubmit = () => props.form.requirementText.trim().length > 0 && !props.l
         </svg>
         {{ pdfFileName }}
         <button class="ri-pdf-remove" title="清除" @click="clearPdf">×</button>
+      </div>
+
+      <!-- 飞书链接输入 -->
+      <div v-if="showFeishuInput" class="ri-feishu-input-row">
+        <input
+          v-model="feishuUrl"
+          class="ri-feishu-url"
+          placeholder="粘贴飞书文档链接，如 https://xxx.feishu.cn/docx/ABC123"
+          @keydown.enter="importFeishuDoc"
+          :disabled="feishuLoading"
+        />
+        <button class="btn btn-primary btn-sm" :disabled="feishuLoading || !feishuUrl.trim()" @click="importFeishuDoc">
+          {{ feishuLoading ? '获取中…' : '获取' }}
+        </button>
+        <button class="btn btn-ghost btn-sm" @click="showFeishuInput = false">取消</button>
+      </div>
+      <div v-if="feishuError" class="ri-feishu-error">{{ feishuError }}</div>
+
+      <!-- 飞书文档富文本预览 -->
+      <div v-if="feishuHtml" class="ri-feishu-preview">
+        <div class="ri-feishu-preview-header">
+          <div class="ri-feishu-preview-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            {{ feishuTitle || '飞书文档' }}
+          </div>
+          <button class="ri-pdf-remove" title="清除" @click="clearFeishu">×</button>
+        </div>
+        <div class="ri-feishu-preview-body" v-html="feishuHtml"></div>
       </div>
 
       <textarea

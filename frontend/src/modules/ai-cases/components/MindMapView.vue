@@ -2,8 +2,8 @@
 import { onMounted, onBeforeUnmount, ref, watch, nextTick, computed } from 'vue'
 import MindElixir from 'mind-elixir'
 import 'mind-elixir/style.css'
-import { categoryLabels } from '../types/workflow'
-import type { IntegrationTest, StructuredSummary, TestCase, TestPoint } from '../types/workflow'
+import { categoryLabels } from '../types'
+import type { IntegrationTest, StructuredSummary, TestCase, TestPoint } from '../types'
 
 interface MindMapNode {
   topic: string

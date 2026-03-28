@@ -11,25 +11,11 @@ import type {
   ReviewTestPointsResponse,
   StructuredSummary,
   TestPoint,
-} from '../types/workflow'
-import type { Platform, TaskFormState } from '../types/workflow'
+} from './types'
+import type { Platform, TaskFormState } from './types'
+import { requestJson, splitLines } from '../../core/api'
 
-const extractErrorMessage = async (response: Response, fallback: string) => {
-  try {
-    const payload = await response.json()
-    if (typeof payload.detail === 'string') return payload.detail
-    if (Array.isArray(payload.detail)) return fallback
-    return fallback
-  } catch {
-    return fallback
-  }
-}
-
-const requestJson = async <T>(input: string, init: RequestInit, fallback: string): Promise<T> => {
-  const response = await fetch(input, init)
-  if (!response.ok) throw new Error(await extractErrorMessage(response, fallback))
-  return response.json() as Promise<T>
-}
+export { splitLines }
 
 export const createWorkflowApi = (baseUrl: string) => ({
   async getMeta(): Promise<MetaResponse> {
@@ -211,10 +197,26 @@ export const createWorkflowApi = (baseUrl: string) => ({
       '删除历史记录失败',
     )
   },
-})
 
-export const splitLines = (value: string) =>
-  value
-    .split(/\n|,|，/)
-    .map(item => item.trim())
-    .filter(Boolean)
+  // ── 飞书文档 ──
+
+  async feishuAuthUrl(): Promise<{ url: string; authorized: boolean }> {
+    return requestJson(`${baseUrl}/api/feishu/auth-url`, { method: 'GET' }, '获取飞书授权信息失败')
+  },
+
+  async feishuCallback(code: string): Promise<{ status: string }> {
+    return requestJson(`${baseUrl}/api/feishu/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }, '飞书授权失败')
+  },
+
+  async feishuFetchDoc(docUrl: string): Promise<{ title: string; html: string; text: string; images_count: number }> {
+    return requestJson(`${baseUrl}/api/feishu/fetch-doc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc_url: docUrl }),
+    }, '飞书文档获取失败')
+  },
+})

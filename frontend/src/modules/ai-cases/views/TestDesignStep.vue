@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import MindMapView from './MindMapView.vue'
-import { categoryLabels } from '../types/workflow'
+import MindMapView from '../components/MindMapView.vue'
+import { categoryLabels } from '../types'
 import type {
   GenerateTestPointsResponse,
   ReviewTestPointsResponse,
   StructuredSummary,
   TestCategory,
   TestPoint,
-} from '../types/workflow'
+} from '../types'
 
 const props = defineProps<{
   apiBaseUrl: string

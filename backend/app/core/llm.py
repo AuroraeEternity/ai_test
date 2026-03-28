@@ -8,7 +8,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from ..config import Settings
+from .config import Settings
 
 logger = logging.getLogger(__name__)
 

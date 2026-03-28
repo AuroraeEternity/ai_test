@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { HistoryRecord } from '../types/workflow'
+import type { HistoryRecord } from '../types'
 
 defineProps<{
   records: HistoryRecord[]
   activeId: string | null
   taskActive: boolean
+  activeModule: string
 }>()
 
 const emit = defineEmits<{
@@ -13,6 +14,8 @@ const emit = defineEmits<{
   newTask: []
   selectRecord: [record: HistoryRecord]
   deleteRecord: [id: string]
+  switchModule: [module: string]
+  enterAiIntro: []
 }>()
 
 const historyExpanded = ref(false)
@@ -29,7 +32,7 @@ const historyExpanded = ref(false)
     </div>
 
     <nav class="sidebar-nav">
-      <button class="nav-item" :class="{ active: !taskActive }" @click="emit('goHome')">
+      <button class="nav-item" :class="{ active: !taskActive && activeModule === 'home' }" @click="emit('goHome')">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
@@ -39,9 +42,9 @@ const historyExpanded = ref(false)
     </nav>
 
     <div class="sidebar-section">
-      <!-- AI 生成测试用例 folder -->
+      <!-- AI 生成测试用例 -->
       <div class="sidebar-folder-row">
-        <button class="sidebar-folder-label" :class="{ active: taskActive }" @click="emit('newTask')">
+        <button class="sidebar-folder-label" :class="{ active: activeModule === 'ai-cases' }" @click="emit('enterAiIntro')">
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 4h6l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/>
           </svg>
@@ -82,6 +85,18 @@ const historyExpanded = ref(false)
             </button>
           </div>
         </div>
+      </div>
+
+      <!-- BQ 数据查询 -->
+      <div class="sidebar-folder-row">
+        <button class="sidebar-folder-label" :class="{ active: activeModule === 'bq-query' }" @click="emit('switchModule', 'bq-query')">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+          </svg>
+          <span>BQ 数据查询</span>
+        </button>
       </div>
     </div>
   </aside>

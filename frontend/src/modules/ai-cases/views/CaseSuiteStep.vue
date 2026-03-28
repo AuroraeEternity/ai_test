@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import MindMapView from './MindMapView.vue'
+import MindMapView from '../components/MindMapView.vue'
 import type {
   GenerateCasesResponse,
   GenerateTestPointsResponse,
@@ -9,7 +9,7 @@ import type {
   StructuredSummary,
   TestPoint,
   ValidationIssue,
-} from '../types/workflow'
+} from '../types'
 
 const props = defineProps<{
   apiBaseUrl: string

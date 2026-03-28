@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from typing import Any
 
-from ..config import get_settings
+from ....core.config import get_settings
 from ..models import (
     AnalyzeStructureLLMOutput,
     AnalyzeStructureRequest,
@@ -55,7 +55,7 @@ from ..prompts import (
     build_review_system_prompt,
     build_review_user_prompt,
 )
-from .llm import LLMService
+from ....core.llm import LLMService
 
 logger = logging.getLogger(__name__)
 

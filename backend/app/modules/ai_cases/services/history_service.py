@@ -16,7 +16,7 @@ from ..models import (
     TestDesignSnapshot,
 )
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+DATA_DIR = Path(__file__).resolve().parents[4] / "data"
 logger = logging.getLogger(__name__)
 
 _VALID_ID_PATTERN = re.compile(r"^[\w\-]+$")
